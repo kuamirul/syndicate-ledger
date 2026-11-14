@@ -1,0 +1,110 @@
+[
+  {
+    "id": "fish_market",
+    "name": "Fish Market",
+    "district": "docks",
+    "baseValue": 4000,
+    "baseDefense": 10,
+    "dirtyYield": 1300,
+    "passiveHeat": 1
+  },
+  {
+    "id": "union_pier",
+    "name": "Union Pier",
+    "district": "docks",
+    "baseValue": 4000,
+    "baseDefense": 10,
+    "dirtyYield": 1300,
+    "passiveHeat": 1
+  },
+  {
+    "id": "bonded_warehouse",
+    "name": "Bonded Warehouse",
+    "district": "docks",
+    "baseValue": 4000,
+    "baseDefense": 10,
+    "dirtyYield": 1300,
+    "passiveHeat": 1
+  },
+  {
+    "id": "dive_bar",
+    "name": "Dive Bar",
+    "district": "neon_strip",
+    "baseValue": 7500,
+    "baseDefense": 18,
+    "dirtyYield": 2400,
+    "passiveHeat": 2
+  },
+  {
+    "id": "velvet_club",
+    "name": "Velvet Club",
+    "district": "neon_strip",
+    "baseValue": 7500,
+    "baseDefense": 18,
+    "dirtyYield": 2400,
+    "passiveHeat": 2
+  },
+  {
+    "id": "sportsbook_parlor",
+    "name": "Sportsbook Parlor",
+    "district": "neon_strip",
+    "baseValue": 7500,
+    "baseDefense": 18,
+    "dirtyYield": 2400,
+    "passiveHeat": 2
+  },
+  {
+    "id": "scrap_yard",
+    "name": "Scrap Yard",
+    "district": "industrial",
+    "baseValue": 12000,
+    "baseDefense": 28,
+    "dirtyYield": 3800,
+    "passiveHeat": 3
+  },
+  {
+    "id": "trucking_depot",
+    "name": "Trucking Depot",
+    "district": "industrial",
+    "baseValue": 12000,
+    "baseDefense": 28,
+    "dirtyYield": 3800,
+    "passiveHeat": 3
+  },
+  {
+    "id": "chemical_plant",
+    "name": "Chemical Plant",
+    "district": "industrial",
+    "baseValue": 12000,
+    "baseDefense": 28,
+    "dirtyYield": 3800,
+    "passiveHeat": 3
+  },
+  {
+    "id": "grand_casino",
+    "name": "Grand Casino",
+    "district": "uptown",
+    "baseValue": 18000,
+    "baseDefense": 42,
+    "dirtyYield": 5800,
+    "passiveHeat": 4
+  },
+  {
+    "id": "penthouse_lounge",
+    "name": "Penthouse Lounge",
+    "district": "uptown",
+    "baseValue": 18000,
+    "baseDefense": 42,
+    "dirtyYield": 5800,
+    "passiveHeat": 4
+  },
+  {
+    "id": "city_hall_annex",
+    "name": "City Hall Annex",
+    "district": "uptown",
+    "baseValue": 18000,
+    "baseDefense": 42,
+    "dirtyYield": 5800,
+    "passiveHeat": 4
+  }
+]

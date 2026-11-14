@@ -1,0 +1,57 @@
+[
+  {
+    "id": "warlord",
+    "name": "The Warlord",
+    "weights": {
+      "greed": 0.9,
+      "aggression": 1.8,
+      "caution": 0.6,
+      "revenge": 1.5
+    },
+    "signatureBehavior": "Heavy Crew recruitment; rushes rival turf early."
+  },
+  {
+    "id": "banker",
+    "name": "The Banker",
+    "weights": {
+      "greed": 1.8,
+      "aggression": 0.7,
+      "caution": 1.6,
+      "revenge": 0.6
+    },
+    "signatureBehavior": "Maximizes CleanCash laundering & Uptown/Week-52 valuation."
+  },
+  {
+    "id": "rat",
+    "name": "The Rat",
+    "weights": {
+      "greed": 1.1,
+      "aggression": 1.0,
+      "caution": 1.5,
+      "revenge": 1.4
+    },
+    "signatureBehavior": "Spams Bribe/Frame to push rivals into 100% RICO indictment."
+  },
+  {
+    "id": "opportunist",
+    "name": "The Opportunist",
+    "weights": {
+      "greed": 1.4,
+      "aggression": 1.3,
+      "caution": 1.1,
+      "revenge": 0.8
+    },
+    "signatureBehavior": "Strikes weakened rivals right after they suffer Botched rolls."
+  },
+  {
+    "id": "turtle",
+    "name": "The Turtle",
+    "weights": {
+      "greed": 1.3,
+      "aggression": 0.6,
+      "caution": 1.8,
+      "revenge": 1.7
+    },
+    "signatureBehavior": "Locks 1 District monopoly with heavy defense; brutal if attacked."
+  }
+]
