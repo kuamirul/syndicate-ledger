@@ -1,0 +1,62 @@
+[
+  {
+    "id": "shakedown",
+    "name": "Corner Shakedown",
+    "difficultyDef": 6,
+    "cleanPayout": 1600,
+    "messyPayout": 1000,
+    "cleanHeat": 2,
+    "messyHeat": 5,
+    "botchedHeat": 8
+  },
+  {
+    "id": "chop_shop",
+    "name": "Boost Luxury Cars",
+    "difficultyDef": 12,
+    "cleanPayout": 3000,
+    "messyPayout": 1800,
+    "cleanHeat": 4,
+    "messyHeat": 9,
+    "botchedHeat": 14
+  },
+  {
+    "id": "hijack",
+    "name": "Cargo Truck Hijack",
+    "difficultyDef": 20,
+    "cleanPayout": 5200,
+    "messyPayout": 3100,
+    "cleanHeat": 6,
+    "messyHeat": 13,
+    "botchedHeat": 20
+  },
+  {
+    "id": "heist",
+    "name": "Armored Van Heist",
+    "difficultyDef": 32,
+    "cleanPayout": 8500,
+    "messyPayout": 4800,
+    "cleanHeat": 10,
+    "messyHeat": 18,
+    "botchedHeat": 28
+  },
+  {
+    "id": "rig_fight",
+    "name": "Rig Title Bout",
+    "difficultyDef": 16,
+    "cleanPayout": 4000,
+    "messyPayout": 2400,
+    "cleanHeat": 3,
+    "messyHeat": 7,
+    "botchedHeat": 12
+  },
+  {
+    "id": "bank_vault",
+    "name": "Midnight Vault Job",
+    "difficultyDef": 48,
+    "cleanPayout": 14000,
+    "messyPayout": 7500,
+    "cleanHeat": 15,
+    "messyHeat": 25,
+    "botchedHeat": 38
+  }
+]
