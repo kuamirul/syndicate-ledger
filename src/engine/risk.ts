@@ -42,22 +42,6 @@ export function clamp(val: number, min: number, max: number): number {
 }
 
 /**
- * Calculates total attack strength for a crew roster.
- * Thug: 3, Enforcer: 8, Hitman: 18.
- */
-export function calculateSyndicateAttack(crew: SyndicateCrew): number {
-  return crew.thug * 3 + crew.enforcer * 8 + crew.hitman * 18;
-}
-
-/**
- * Calculates total defense strength for a crew roster.
- * Thug: 3, Enforcer: 8, Hitman: 12.
- */
-export function calculateSyndicateDefense(crew: SyndicateCrew): number {
-  return crew.thug * 3 + crew.enforcer * 8 + crew.hitman * 12;
-}
-
-/**
  * Calculates the exact 3-tier risk roll probabilities based on Section 4 formula:
  * R = AttackerAttack / max(1, TargetDefense)
  * Base Clean Hit %: clamp(round(40 * R), 10, 75)

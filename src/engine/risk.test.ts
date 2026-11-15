@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { calculateSyndicateAttack, calculateSyndicateDefense } from './crew';
 import {
   calculateRiskProbabilities,
-  calculateSyndicateAttack,
-  calculateSyndicateDefense,
   removeLowestTierCrew,
   resolveRiskRoll,
 } from './risk';

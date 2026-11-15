@@ -1,7 +1,23 @@
 // Pure TypeScript Weekly Turn Flow & Economy Reducer (No UI, DOM, or React imports)
 
 import { CITY_RACKETS, CREW_BY_ID, JOBS_BY_ID } from '../data';
-import { calculateSyndicateAttack, PREP_CONFIG, resolveRiskRoll } from './risk';
+import {
+  ASSAULT_BASE_COST,
+  BRIBE_CLEAN_COST,
+  BRIBE_DIRTY_COST,
+  BRIBE_FRAME_HEAT,
+  BRIBE_SELF_HEAT,
+  LAUNDER_FEE_PCT,
+  LAUNDER_MAX,
+  WIRETAP_COST,
+  WIRETAP_WEEKS,
+} from './constants';
+import {
+  calculateSyndicateAttack,
+  calculateSyndicatePayroll,
+  calculateTotalCrewCount,
+} from './crew';
+import { PREP_CONFIG, resolveRiskRoll } from './risk';
 import { rollPercentage } from './rng';
 import type {
   Action,
@@ -22,10 +38,28 @@ function clamp(val: number, min: number, max: number): number {
 }
 
 /**
- * Calculates total count of active crew members for a syndicate.
+ * Projects Sunday dirty racket yield for a syndicate including district monopoly bonus
+ * and damaged status.
  */
-export function calculateTotalCrewCount(crew: SyndicateCrew): number {
-  return crew.thug + crew.enforcer + crew.hitman;
+export function calculateProjectedRacketYield(
+  syndicateId: string,
+  rackets: Record<string, RacketState>
+): number {
+  let totalYield = 0;
+  for (const racket of Object.values(rackets)) {
+    if (racket.ownerId === syndicateId) {
+      const monopoly = hasDistrictMonopoly(syndicateId, racket.district, rackets);
+      let currentYield = racket.dirtyYield;
+      if (monopoly) {
+        currentYield = Math.floor(currentYield * 1.25);
+      }
+      if (racket.damagedTurnsRemaining > 0) {
+        currentYield = Math.floor(currentYield * 0.5);
+      }
+      totalYield += currentYield;
+    }
+  }
+  return totalYield;
 }
 
 /**
@@ -199,6 +233,9 @@ export function createInitialGameState(seed: number = 42): GameState {
 }
 
 export interface ActionResult {
+  /** True when state was committed (AP/resources spent); false on validation rejection. */
+  executed: boolean;
+  /** Whether the action achieved its goal (a botched SEIZE is executed but not successful). */
   success: boolean;
   reason?: string;
   payout?: number;
@@ -218,20 +255,20 @@ export function applyAction(
   action: Action
 ): { state: GameState; result: ActionResult } {
   if (prevState.isGameOver) {
-    return { state: prevState, result: { success: false, reason: 'Game is already over' } };
+    return { state: prevState, result: { executed: false, success: false, reason: 'Game is already over' } };
   }
 
   const syndicate = prevState.syndicates[syndicateId];
   if (!syndicate) {
-    return { state: prevState, result: { success: false, reason: 'Syndicate not found' } };
+    return { state: prevState, result: { executed: false, success: false, reason: 'Syndicate not found' } };
   }
 
   if (syndicate.isEliminated) {
-    return { state: prevState, result: { success: false, reason: 'Syndicate is eliminated' } };
+    return { state: prevState, result: { executed: false, success: false, reason: 'Syndicate is eliminated' } };
   }
 
   if (syndicate.actionPoints < 1) {
-    return { state: prevState, result: { success: false, reason: 'Insufficient Action Points' } };
+    return { state: prevState, result: { executed: false, success: false, reason: 'Insufficient Action Points' } };
   }
 
   const nextState = cloneGameState(prevState);
@@ -240,18 +277,18 @@ export function applyAction(
 
   switch (action.type) {
     case 'PASS': {
-      return { state: nextState, result: { success: true } };
+      return { state: nextState, result: { executed: true, success: true } };
     }
 
     case 'EXTORT': {
       const job = JOBS_BY_ID[action.jobId];
       if (!job) {
-        return { state: prevState, result: { success: false, reason: 'Invalid street job ID' } };
+        return { state: prevState, result: { executed: false, success: false, reason: 'Invalid street job ID' } };
       }
 
       const prep = PREP_CONFIG[action.prepTier];
       if (actor.dirtyCash < prep.cost) {
-        return { state: prevState, result: { success: false, reason: 'Cannot afford preparation cost' } };
+        return { state: prevState, result: { executed: false, success: false, reason: 'Cannot afford preparation cost' } };
       }
 
       actor.dirtyCash -= prep.cost;
@@ -288,6 +325,7 @@ export function applyAction(
       return {
         state: nextState,
         result: {
+          executed: true,
           success: true,
           outcome: resolution.outcome,
           roll: resolution.roll,
@@ -301,19 +339,18 @@ export function applyAction(
     case 'SEIZE': {
       const racket = nextState.rackets[action.racketId];
       if (!racket) {
-        return { state: prevState, result: { success: false, reason: 'Invalid racket ID' } };
+        return { state: prevState, result: { executed: false, success: false, reason: 'Invalid racket ID' } };
       }
 
       if (racket.ownerId === syndicateId) {
-        return { state: prevState, result: { success: false, reason: 'Syndicate already owns this racket' } };
+        return { state: prevState, result: { executed: false, success: false, reason: 'Syndicate already owns this racket' } };
       }
 
       const prep = PREP_CONFIG[action.prepTier];
-      const baseAssaultCost = 1500;
-      const totalCost = baseAssaultCost + prep.cost;
+      const totalCost = ASSAULT_BASE_COST + prep.cost;
 
       if (actor.dirtyCash < totalCost) {
-        return { state: prevState, result: { success: false, reason: 'Insufficient DirtyCash for assault' } };
+        return { state: prevState, result: { executed: false, success: false, reason: 'Insufficient DirtyCash for assault' } };
       }
 
       actor.dirtyCash -= totalCost;
@@ -365,6 +402,7 @@ export function applyAction(
       return {
         state: nextState,
         result: {
+          executed: true,
           success: seized,
           outcome: resolution.outcome,
           roll: resolution.roll,
@@ -376,11 +414,11 @@ export function applyAction(
     case 'RECRUIT': {
       const tierDef = CREW_BY_ID[action.tier];
       if (!tierDef) {
-        return { state: prevState, result: { success: false, reason: 'Invalid crew tier' } };
+        return { state: prevState, result: { executed: false, success: false, reason: 'Invalid crew tier' } };
       }
 
       if (action.count < 1 || action.count > 3 || !Number.isInteger(action.count)) {
-        return { state: prevState, result: { success: false, reason: 'Must hire between 1 and 3 units' } };
+        return { state: prevState, result: { executed: false, success: false, reason: 'Must hire between 1 and 3 units' } };
       }
 
       const ownedRackets = countOwnedRackets(syndicateId, nextState.rackets);
@@ -388,6 +426,7 @@ export function applyAction(
         return {
           state: prevState,
           result: {
+            executed: false,
             success: false,
             reason: `Requires at least ${tierDef.requiredRackets} owned rackets to unlock ${tierDef.name}`,
           },
@@ -398,7 +437,7 @@ export function applyAction(
       const totalFunds = actor.dirtyCash + actor.cleanCash;
 
       if (totalFunds < totalCost) {
-        return { state: prevState, result: { success: false, reason: 'Insufficient funds for recruitment' } };
+        return { state: prevState, result: { executed: false, success: false, reason: 'Insufficient funds for recruitment' } };
       }
 
       const dirtyPay = Math.min(actor.dirtyCash, totalCost);
@@ -408,68 +447,68 @@ export function applyAction(
       actor.cleanCash -= cleanPay;
       actor.crew[action.tier] += action.count;
 
-      return { state: nextState, result: { success: true } };
+      return { state: nextState, result: { executed: true, success: true } };
     }
 
     case 'LAUNDER': {
       const amount = Math.floor(action.amount);
-      if (amount <= 0 || amount > 10000) {
-        return { state: prevState, result: { success: false, reason: 'Launder amount must be between $1 and $10,000' } };
+      if (amount <= 0 || amount > LAUNDER_MAX) {
+        return { state: prevState, result: { executed: false, success: false, reason: 'Launder amount must be between $1 and $10,000' } };
       }
 
       if (actor.dirtyCash < amount) {
-        return { state: prevState, result: { success: false, reason: 'Insufficient DirtyCash to launder' } };
+        return { state: prevState, result: { executed: false, success: false, reason: 'Insufficient DirtyCash to launder' } };
       }
 
-      const cleanReceived = Math.floor(amount * 0.75); // 25% fee
+      const cleanReceived = Math.floor((amount * (100 - LAUNDER_FEE_PCT)) / 100);
       actor.dirtyCash -= amount;
       actor.cleanCash += cleanReceived;
 
-      return { state: nextState, result: { success: true, payout: cleanReceived } };
+      return { state: nextState, result: { executed: true, success: true, payout: cleanReceived } };
     }
 
     case 'BRIBE': {
       if (action.useClean) {
-        if (actor.cleanCash < 3000) {
-          return { state: prevState, result: { success: false, reason: 'Requires $3,000 CleanCash to bribe' } };
+        if (actor.cleanCash < BRIBE_CLEAN_COST) {
+          return { state: prevState, result: { executed: false, success: false, reason: 'Requires $3,000 CleanCash to bribe' } };
         }
-        actor.cleanCash -= 3000;
+        actor.cleanCash -= BRIBE_CLEAN_COST;
       } else {
-        if (actor.dirtyCash < 4500) {
-          return { state: prevState, result: { success: false, reason: 'Requires $4,500 DirtyCash to bribe' } };
+        if (actor.dirtyCash < BRIBE_DIRTY_COST) {
+          return { state: prevState, result: { executed: false, success: false, reason: 'Requires $4,500 DirtyCash to bribe' } };
         }
-        actor.dirtyCash -= 4500;
+        actor.dirtyCash -= BRIBE_DIRTY_COST;
       }
 
       const targetId = action.targetSyndicateId;
       if (!targetId || targetId === syndicateId) {
-        actor.heat = Math.max(0, actor.heat - 22);
+        actor.heat = Math.max(0, actor.heat - BRIBE_SELF_HEAT);
       } else {
         const target = nextState.syndicates[targetId];
         if (!target || target.isEliminated) {
-          return { state: prevState, result: { success: false, reason: 'Invalid target syndicate to frame' } };
+          return { state: prevState, result: { executed: false, success: false, reason: 'Invalid target syndicate to frame' } };
         }
-        target.heat = Math.min(100, target.heat + 12);
+        target.heat = Math.min(100, target.heat + BRIBE_FRAME_HEAT);
         target.grudge[syndicateId] = (target.grudge[syndicateId] ?? 0) + 10;
       }
 
-      return { state: nextState, result: { success: true } };
+      return { state: nextState, result: { executed: true, success: true } };
     }
 
     case 'WIRETAP': {
-      if (actor.dirtyCash < 1000) {
-        return { state: prevState, result: { success: false, reason: 'Wiretap costs $1,000 DirtyCash' } };
+      if (actor.dirtyCash < WIRETAP_COST) {
+        return { state: prevState, result: { executed: false, success: false, reason: 'Wiretap costs $1,000 DirtyCash' } };
       }
 
       const target = nextState.syndicates[action.targetSyndicateId];
       if (!target || target.isEliminated || action.targetSyndicateId === syndicateId) {
-        return { state: prevState, result: { success: false, reason: 'Invalid wiretap target' } };
+        return { state: prevState, result: { executed: false, success: false, reason: 'Invalid wiretap target' } };
       }
 
-      actor.dirtyCash -= 1000;
-      actor.wiretapTurnsRemaining[action.targetSyndicateId] = 3;
+      actor.dirtyCash -= WIRETAP_COST;
+      actor.wiretapTurnsRemaining[action.targetSyndicateId] = WIRETAP_WEEKS;
 
-      return { state: nextState, result: { success: true } };
+      return { state: nextState, result: { executed: true, success: true } };
     }
   }
 }
@@ -497,25 +536,7 @@ export function advanceWeek(prevState: GameState): GameState {
   for (const syndicate of Object.values(nextState.syndicates)) {
     if (syndicate.isEliminated) continue;
 
-    let weeklyYield = 0;
-    for (const racket of Object.values(nextState.rackets)) {
-      if (racket.ownerId === syndicate.id) {
-        const monopoly = hasDistrictMonopoly(syndicate.id, racket.district, nextState.rackets);
-        let currentYield = racket.dirtyYield;
-
-        if (monopoly) {
-          currentYield = Math.floor(currentYield * 1.25);
-        }
-
-        if (racket.damagedTurnsRemaining > 0) {
-          currentYield = Math.floor(currentYield * 0.5);
-        }
-
-        weeklyYield += currentYield;
-      }
-    }
-
-    syndicate.dirtyCash += weeklyYield;
+    syndicate.dirtyCash += calculateProjectedRacketYield(syndicate.id, nextState.rackets);
   }
 
   // Decrement damaged turns on rackets
@@ -529,10 +550,7 @@ export function advanceWeek(prevState: GameState): GameState {
   for (const syndicate of Object.values(nextState.syndicates)) {
     if (syndicate.isEliminated) continue;
 
-    const payroll =
-      syndicate.crew.thug * 250 +
-      syndicate.crew.enforcer * 600 +
-      syndicate.crew.hitman * 1300;
+    const payroll = calculateSyndicatePayroll(syndicate.crew);
 
     if (syndicate.dirtyCash >= payroll) {
       syndicate.dirtyCash -= payroll;
