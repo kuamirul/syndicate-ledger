@@ -8,17 +8,25 @@ import {
   STREET_JOBS,
 } from '../data';
 import {
+  ASSAULT_BASE_COST,
+  BRIBE_CLEAN_COST,
+  BRIBE_DIRTY_COST,
+  LAUNDER_MAX,
+  WIRETAP_COST,
+} from './constants';
+import {
+  calculateSyndicateAttack,
+  calculateSyndicatePayroll,
+  calculateTotalCrewCount,
+} from './crew';
+import {
   applyAction,
+  calculateProjectedRacketYield,
   calculateSyndicateValuation,
   countOwnedRackets,
-  hasDistrictMonopoly,
 } from './reducer';
 import type { ActionResult } from './reducer';
-import {
-  calculateRiskProbabilities,
-  calculateSyndicateAttack,
-  PREP_CONFIG,
-} from './risk';
+import { calculateRiskProbabilities, PREP_CONFIG } from './risk';
 import type {
   Action,
   ArchetypeWeights,
@@ -26,45 +34,7 @@ import type {
   DecisionTraceScores,
   GameState,
   RacketState,
-  SyndicateCrew,
 } from './types';
-
-/**
- * Calculates total weekly payroll for a syndicate crew roster.
- * Thug: $250, Enforcer: $600, Hitman: $1,300.
- */
-export function calculateSyndicatePayroll(crew: SyndicateCrew): number {
-  return (
-    crew.thug * CREW_BY_ID.thug.weeklyPayroll +
-    crew.enforcer * CREW_BY_ID.enforcer.weeklyPayroll +
-    crew.hitman * CREW_BY_ID.hitman.weeklyPayroll
-  );
-}
-
-/**
- * Projects Sunday dirty racket yield for a syndicate including district monopoly bonus
- * and damaged status.
- */
-export function calculateProjectedRacketYield(
-  syndicateId: string,
-  rackets: Record<string, RacketState>
-): number {
-  let totalYield = 0;
-  for (const racket of Object.values(rackets)) {
-    if (racket.ownerId === syndicateId) {
-      const monopoly = hasDistrictMonopoly(syndicateId, racket.district, rackets);
-      let currentYield = racket.dirtyYield;
-      if (monopoly) {
-        currentYield = Math.floor(currentYield * 1.25);
-      }
-      if (racket.damagedTurnsRemaining > 0) {
-        currentYield = Math.floor(currentYield * 0.5);
-      }
-      totalYield += currentYield;
-    }
-  }
-  return totalYield;
-}
 
 /**
  * Checks if a syndicate is the citywide leader (holds >= 5 rackets).
@@ -121,23 +91,22 @@ export function generateCandidateActions(
   }
 
   // 2. SEIZE actions (Rival or Neutral rackets x affordable prep tiers)
-  const baseAssaultCost = 1500;
   for (const racket of Object.values(state.rackets)) {
     // Cannot attack own racket
     if (racket.ownerId === actor.id) continue;
 
     // Prep Tier 0
-    if (actor.dirtyCash >= baseAssaultCost + PREP_CONFIG[0].cost) {
+    if (actor.dirtyCash >= ASSAULT_BASE_COST + PREP_CONFIG[0].cost) {
       actions.push({ type: 'SEIZE', racketId: racket.id, prepTier: 0 });
     }
 
     // Prep Tier 1
-    if (actor.dirtyCash >= baseAssaultCost + PREP_CONFIG[1].cost) {
+    if (actor.dirtyCash >= ASSAULT_BASE_COST + PREP_CONFIG[1].cost) {
       actions.push({ type: 'SEIZE', racketId: racket.id, prepTier: 1 });
     }
 
     // Prep Tier 2
-    if (actor.dirtyCash >= baseAssaultCost + PREP_CONFIG[2].cost) {
+    if (actor.dirtyCash >= ASSAULT_BASE_COST + PREP_CONFIG[2].cost) {
       actions.push({ type: 'SEIZE', racketId: racket.id, prepTier: 2 });
     }
   }
@@ -155,7 +124,7 @@ export function generateCandidateActions(
 
   // 4. LAUNDER actions (Convert up to $10,000 DirtyCash to CleanCash)
   if (actor.dirtyCash >= 1000) {
-    const maxLaunder = Math.min(10000, actor.dirtyCash);
+    const maxLaunder = Math.min(LAUNDER_MAX, actor.dirtyCash);
     actions.push({ type: 'LAUNDER', amount: maxLaunder });
 
     // If actor has plenty of cash, also consider a smaller 5k increment
@@ -167,10 +136,10 @@ export function generateCandidateActions(
   // 5. BRIBE actions
   // 5a. Heat reduction on self
   if (actor.heat > 0) {
-    if (actor.cleanCash >= 3000) {
+    if (actor.cleanCash >= BRIBE_CLEAN_COST) {
       actions.push({ type: 'BRIBE', useClean: true });
     }
-    if (actor.dirtyCash >= 4500) {
+    if (actor.dirtyCash >= BRIBE_DIRTY_COST) {
       actions.push({ type: 'BRIBE', useClean: false });
     }
   }
@@ -179,16 +148,16 @@ export function generateCandidateActions(
   for (const rival of Object.values(state.syndicates)) {
     if (rival.id === actor.id || rival.isEliminated) continue;
 
-    if (actor.cleanCash >= 3000) {
+    if (actor.cleanCash >= BRIBE_CLEAN_COST) {
       actions.push({ type: 'BRIBE', useClean: true, targetSyndicateId: rival.id });
     }
-    if (actor.dirtyCash >= 4500) {
+    if (actor.dirtyCash >= BRIBE_DIRTY_COST) {
       actions.push({ type: 'BRIBE', useClean: false, targetSyndicateId: rival.id });
     }
   }
 
   // 6. WIRETAP actions ($1,000 to reveal wallet & intents)
-  if (actor.dirtyCash >= 1000) {
+  if (actor.dirtyCash >= WIRETAP_COST) {
     for (const rival of Object.values(state.syndicates)) {
       if (rival.id === actor.id || rival.isEliminated) continue;
       const wiretapRemaining = actor.wiretapTurnsRemaining[rival.id] ?? 0;
@@ -308,7 +277,7 @@ export function scoreCandidateAction(
       // Net EV: Expected dirty yield stream (~4 weeks value) minus assault and casualty cost
       const expectedYieldValue = pSuccess * (racket.dirtyYield * 4);
       const expectedCasualtyCost = pMessy * 800 + pBotched * 1600;
-      const netEV = expectedYieldValue - 1500 - prepCost - expectedCasualtyCost;
+      const netEV = expectedYieldValue - ASSAULT_BASE_COST - prepCost - expectedCasualtyCost;
       evScore = Math.round(netEV / 100);
 
       // Turf Score: territorial conquest and monopoly progress
@@ -343,8 +312,7 @@ export function scoreCandidateAction(
 
       // The Opportunist strikes weakened rivals (defender has <= 2 total crew)
       if (actor.archetypeId === 'opportunist' && targetDefender) {
-        const defenderCrewCount =
-          targetDefender.crew.thug + targetDefender.crew.enforcer + targetDefender.crew.hitman;
+        const defenderCrewCount = calculateTotalCrewCount(targetDefender.crew);
         if (defenderCrewCount <= 2) {
           turfScore += 25;
         }
@@ -422,7 +390,7 @@ export function scoreCandidateAction(
     }
 
     case 'BRIBE': {
-      const cost = action.useClean ? 3000 : 4500;
+      const cost = action.useClean ? BRIBE_CLEAN_COST : BRIBE_DIRTY_COST;
       evScore = -Math.round(cost / 200);
 
       if (!action.targetSyndicateId) {
@@ -626,6 +594,18 @@ export function selectBestAIAction(
 }
 
 /**
+ * Appends a trace without mutating the caller's state: pushes onto the fresh clone when the
+ * action executed, otherwise returns a shallow copy of the (unchanged) input state.
+ */
+function appendTrace(nextState: GameState, prevState: GameState, trace: DecisionTrace): GameState {
+  if (nextState !== prevState) {
+    nextState.decisionTraces.push(trace);
+    return nextState;
+  }
+  return { ...prevState, decisionTraces: [...prevState.decisionTraces, trace] };
+}
+
+/**
  * Executes a single AI Action Point (1 AP) for a syndicate via applyAction(),
  * appending the resulting DecisionTrace. Maintains 100% zero-cheat symmetry.
  */
@@ -635,8 +615,7 @@ export function executeAIAction(
 ): { state: GameState; trace: DecisionTrace; result: ActionResult } {
   const { action, trace } = selectBestAIAction(state, syndicateId);
   const { state: nextState, result } = applyAction(state, syndicateId, action);
-  nextState.decisionTraces.push(trace);
-  return { state: nextState, trace, result };
+  return { state: appendTrace(nextState, state, trace), trace, result };
 }
 
 /**
@@ -656,12 +635,12 @@ export function executeAITurn(
   ) {
     const { action, trace } = selectBestAIAction(currentState, syndicateId);
     const { state: nextState, result } = applyAction(currentState, syndicateId, action);
-    nextState.decisionTraces.push(trace);
+    currentState = appendTrace(nextState, currentState, trace);
     traces.push(trace);
-    currentState = nextState;
 
-    // If AI chose to pass or action failed, conclude this syndicate's turn
-    if (action.type === 'PASS' || !result.success) {
+    // Conclude the turn on PASS or a rejected action. A botched SEIZE is executed
+    // (resources spent) but unsuccessful, so the turn continues.
+    if (action.type === 'PASS' || !result.executed) {
       break;
     }
   }

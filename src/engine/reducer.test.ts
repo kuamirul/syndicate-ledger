@@ -83,6 +83,57 @@ describe('Weekly Turn Flow & Reducer Engine', () => {
       }
     });
 
+    it('botched SEIZE is executed but unsuccessful: AP, cost and crew are committed', () => {
+      let found = false;
+      for (let seed = 1; seed <= 500 && !found; seed++) {
+        const state = createInitialGameState(seed);
+        const { state: next, result } = applyAction(state, 'player', {
+          type: 'SEIZE',
+          racketId: 'fish_market',
+          prepTier: 1,
+        });
+        if (result.outcome !== 'BOTCHED') continue;
+        found = true;
+
+        expect(result.executed).toBe(true);
+        expect(result.success).toBe(false);
+        expect(next).not.toBe(state);
+        expect(next.syndicates.player?.actionPoints).toBe(2);
+        expect(next.syndicates.player?.dirtyCash).toBe(6000 - 1500 - 1200);
+        expect(result.casualtiesLost).toBe(2);
+        expect(next.syndicates.player?.crew.thug).toBe(2);
+        expect(next.rackets.fish_market?.ownerId).toBeNull();
+        // input untouched
+        expect(state.syndicates.player?.actionPoints).toBe(3);
+      }
+      expect(found).toBe(true);
+    });
+
+    it('rejections return executed:false and the same state reference', () => {
+      const state = createInitialGameState(42);
+      const broke = createInitialGameState(42);
+      broke.syndicates.player!.dirtyCash = 0;
+      const noAp = createInitialGameState(42);
+      noAp.syndicates.player!.actionPoints = 0;
+
+      const cases: Array<[typeof state, Parameters<typeof applyAction>[2], string]> = [
+        [noAp, { type: 'PASS' }, 'player'],
+        [broke, { type: 'SEIZE', racketId: 'fish_market', prepTier: 0 }, 'player'],
+        [state, { type: 'SEIZE', racketId: 'nope', prepTier: 0 }, 'player'],
+        [state, { type: 'RECRUIT', tier: 'enforcer', count: 1 }, 'player'],
+        [state, { type: 'LAUNDER', amount: 20000 }, 'player'],
+        [state, { type: 'BRIBE', useClean: true }, 'player'],
+        [state, { type: 'WIRETAP', targetSyndicateId: 'player' }, 'player'],
+        [state, { type: 'PASS' }, 'ghost'],
+      ];
+      for (const [s, action, id] of cases) {
+        const { state: next, result } = applyAction(s, id, action);
+        expect(result.executed).toBe(false);
+        expect(result.success).toBe(false);
+        expect(next).toBe(s);
+      }
+    });
+
     it('executes RECRUIT action respecting racket thresholds', () => {
       const state = createInitialGameState(42);
 

@@ -1,18 +1,18 @@
 // W2-T5 — Symmetric Utility AI v1 Unit Tests
 
 import { describe, expect, it } from 'vitest';
+import { calculateSyndicatePayroll } from './crew';
 import {
-  calculateProjectedRacketYield,
-  calculateSyndicatePayroll,
   evaluateCandidateActions,
   executeAllAITurns,
+  executeAIAction,
   executeAITurn,
   findCityLeader,
   generateCandidateActions,
   scoreCandidateAction,
   selectBestAIAction,
 } from './ai';
-import { createInitialGameState } from './reducer';
+import { applyAction, calculateProjectedRacketYield, createInitialGameState } from './reducer';
 import type { GameState, SyndicateState } from './types';
 
 // ---------------------------------------------------------------------------
@@ -530,6 +530,42 @@ describe('executeAITurn — zero-cheat symmetry', () => {
       expect(Number.isInteger(s.cleanCash)).toBe(true);
       expect(Number.isInteger(s.heat)).toBe(true);
     }
+  });
+});
+
+describe('executeAITurn — botched rolls and input immutability', () => {
+  it('turn continues after a botched SEIZE roll', () => {
+    let found = false;
+    for (let seed = 1; seed <= 2000 && !found; seed++) {
+      const state = createInitialGameState(seed);
+      for (const aiId of ['ai_1', 'ai_2', 'ai_3']) {
+        const { action } = selectBestAIAction(state, aiId);
+        if (action.type !== 'SEIZE') continue;
+        const { result } = applyAction(state, aiId, action);
+        if (result.outcome !== 'BOTCHED') continue;
+
+        found = true;
+        const { state: after, traces } = executeAITurn(state, aiId);
+        expect(traces[0]?.action.type).toBe('SEIZE');
+        expect(traces.length).toBeGreaterThan(1);
+        expect(after.syndicates[aiId]!.actionPoints).toBeLessThan(2);
+        break;
+      }
+    }
+    expect(found).toBe(true);
+  });
+
+  it('executeAIAction does not mutate input state when the action is rejected', () => {
+    const base = createInitialGameState(7);
+    const state = patchSyndicate(base, 'ai_1', { actionPoints: 0 });
+    const snapshot = structuredClone(state);
+
+    const { state: after, trace, result } = executeAIAction(state, 'ai_1');
+
+    expect(trace.action.type).toBe('PASS');
+    expect(result.executed).toBe(false);
+    expect(state).toEqual(snapshot);
+    expect(after.decisionTraces).toHaveLength(state.decisionTraces.length + 1);
   });
 });
 
