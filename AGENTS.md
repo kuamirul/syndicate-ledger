@@ -9,6 +9,7 @@ You are building **Syndicate Ledger**, a deterministic, client-side turn-based c
 - **Strict Scope Fence:** Implement **ONLY** the requested Task ID. Do NOT proactively scaffold future milestones (e.g., do not build Diplomacy, Lieutenants, or `shadcn/ui` components during Week 1–2 tasks; stub minimal fields only if required by types).
 - **Test-Gated Completion:** Every task touching `/src/engine/` or `/src/data/` MUST add or update `Vitest` unit tests and pass `npm test` + `npm run typecheck` with zero errors before completion.
 - **Never Weaken Tests:** Never delete or loosen an existing test assertion just to force a green build. Surface math/balance mismatches explicitly.
+- **Handoff Note (end of every step):** After finishing any step/task, create or update a handoff note in `docs/` (e.g. `docs/HANDOFF-stepN.md` for the *next* step) covering: current state (tests/typecheck/lint/build), what just landed, next task + plan, known issues, and explicit out-of-scope items. Commit it with the step.
 
 ## 2. Hard Architectural Invariants
 - **Engine Purity (`/src/engine/`):** Files inside `/src/engine/` MUST be 100% pure TypeScript. They are strictly forbidden from importing `react`, `zustand`, DOM/`window` APIs, `localStorage`, or CSS. The engine must execute headlessly in Node.js for CLI Monte Carlo simulations.
