@@ -21,6 +21,7 @@ const report = runSimulation(games, seed);
 const elapsed = performance.now() - start;
 
 console.log(formatReport(report, elapsed));
-if (games >= 1000 && elapsed > 2000) {
-  console.warn(`\nWARNING: ${games} games took ${elapsed.toFixed(0)} ms (target < 2000 ms)`);
+const BUDGET_MS_PER_1000 = 5000; // relaxed from 2000 in W3-T8a: games now run ~37 weeks, not ~3
+if (games >= 1000 && elapsed > (BUDGET_MS_PER_1000 * games) / 1000) {
+  console.warn(`\nWARNING: ${games} games took ${elapsed.toFixed(0)} ms (target < ${(BUDGET_MS_PER_1000 * games) / 1000} ms)`);
 }

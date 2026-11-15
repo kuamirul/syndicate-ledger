@@ -83,7 +83,7 @@ export type Action =
 
 export type EliminationReason = 'RICO' | 'INSOLVENT' | 'WIPED_OUT';
 
-export type WinReason = 'DOMINATION' | 'VALUATION';
+export type WinReason = 'DOMINATION' | 'VALUATION' | 'LAST_STANDING';
 
 export interface DecisionTraceScores {
   evScore: number;

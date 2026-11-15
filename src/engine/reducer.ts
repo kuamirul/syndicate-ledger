@@ -63,6 +63,28 @@ export function calculateProjectedRacketYield(
 }
 
 /**
+ * Projects a syndicate's Heat after the Sunday passive step (SPEC §2):
+ * `heat - 5 + Σ(owned racket passiveHeat) + max(0, (ownedRackets - 3) * 2)`, clamped to 0–100.
+ * Single source of truth for advanceWeek() and the AI's RICO projection.
+ */
+export function projectSundayHeat(
+  syndicateId: string,
+  heat: number,
+  rackets: Record<string, RacketState>
+): number {
+  let ownedCount = 0;
+  let racketPassiveHeat = 0;
+  for (const racket of Object.values(rackets)) {
+    if (racket.ownerId === syndicateId) {
+      ownedCount++;
+      racketPassiveHeat += racket.passiveHeat;
+    }
+  }
+  const empireHeatTax = Math.max(0, (ownedCount - 3) * 2);
+  return clamp(heat - 5 + racketPassiveHeat + empireHeatTax, 0, 100);
+}
+
+/**
  * Calculates Syndicate Valuation according to Section 1:
  * Valuation = (CleanCash * 2) + DirtyCash + Sum(OwnedRacketBaseValue)
  */
@@ -595,18 +617,7 @@ export function advanceWeek(prevState: GameState): GameState {
   for (const syndicate of Object.values(nextState.syndicates)) {
     if (syndicate.isEliminated) continue;
 
-    const ownedCount = countOwnedRackets(syndicate.id, nextState.rackets);
-    let racketPassiveHeat = 0;
-    for (const racket of Object.values(nextState.rackets)) {
-      if (racket.ownerId === syndicate.id) {
-        racketPassiveHeat += racket.passiveHeat;
-      }
-    }
-
-    const empireHeatTax = Math.max(0, (ownedCount - 3) * 2);
-    const netHeatChange = -5 + racketPassiveHeat + empireHeatTax;
-
-    syndicate.heat = clamp(syndicate.heat + netHeatChange, 0, 100);
+    syndicate.heat = projectSundayHeat(syndicate.id, syndicate.heat, nextState.rackets);
   }
 
   // --- Step 4: High-Heat Hazard (Police Raid >= 70 Heat) ---
@@ -674,7 +685,7 @@ export function advanceWeek(prevState: GameState): GameState {
     const lastStanding = livingSyndicates[0]!;
     nextState.isGameOver = true;
     nextState.winnerId = lastStanding.id;
-    nextState.winReason = 'DOMINATION';
+    nextState.winReason = 'LAST_STANDING';
   } else if (livingSyndicates.length === 0) {
     nextState.isGameOver = true;
     nextState.winnerId = null;

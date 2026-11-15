@@ -3,6 +3,8 @@
 import { describe, expect, it } from 'vitest';
 import { calculateSyndicatePayroll } from './crew';
 import {
+  bestJobEV,
+  buildScoringContext,
   evaluateCandidateActions,
   executeAllAITurns,
   executeAIAction,
@@ -11,8 +13,16 @@ import {
   generateCandidateActions,
   scoreCandidateAction,
   selectBestAIAction,
+  upfrontCost,
 } from './ai';
-import { applyAction, calculateProjectedRacketYield, createInitialGameState } from './reducer';
+import { AI_CASH_RESERVE, AI_RICO_EMERGENCY, AI_SAFE_HEAT } from './constants';
+import {
+  advanceWeek,
+  applyAction,
+  calculateProjectedRacketYield,
+  createInitialGameState,
+  projectSundayHeat,
+} from './reducer';
 import type { GameState, SyndicateState } from './types';
 
 // ---------------------------------------------------------------------------
@@ -684,6 +694,207 @@ describe('Integer math invariant', () => {
       expect(Number.isInteger(s.emergencyModifiers)).toBe(true);
       expect(Number.isInteger(s.coalitionBonus)).toBe(true);
       expect(Number.isInteger(s.totalScore)).toBe(true);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 13. W3-T8a balance rules (AI scoring only — game rules unchanged)
+// ---------------------------------------------------------------------------
+
+describe('W3-T8a — liquidity guard', () => {
+  it('upfrontCost matches what applyAction actually charges', () => {
+    const state = patchSyndicate(createInitialGameState(3), 'ai_1', { dirtyCash: 20000 });
+    const actions = [
+      { type: 'SEIZE', racketId: 'fish_market', prepTier: 1 },
+      { type: 'EXTORT', jobId: 'shakedown', prepTier: 2 },
+      { type: 'RECRUIT', tier: 'thug', count: 3 },
+      { type: 'WIRETAP', targetSyndicateId: 'ai_2' },
+      { type: 'BRIBE', useClean: false },
+    ] as const;
+    for (const action of actions) {
+      const before = state.syndicates.ai_1!;
+      const { state: next, result } = applyAction(state, 'ai_1', action);
+      expect(result.executed).toBe(true);
+      const after = next.syndicates.ai_1!;
+      // EXTORT pays out after the roll; compare spend before payout.
+      const payout = result.payout ?? 0;
+      const spent = before.dirtyCash + before.cleanCash - (after.dirtyCash + after.cleanCash) + payout;
+      expect(spent).toBe(upfrontCost(action));
+    }
+    // LAUNDER destroys exactly the 25% fee.
+    expect(upfrontCost({ type: 'LAUNDER', amount: 2500 })).toBe(625);
+    expect(upfrontCost({ type: 'PASS' })).toBe(0);
+  });
+
+  it('clamps a spend that would leave less than payroll + reserve', () => {
+    // 4 thugs = $1,000 payroll; SEIZE prep 0 costs $1,500.
+    const floor = 1000 + AI_CASH_RESERVE;
+    const seize = { type: 'SEIZE', racketId: 'fish_market', prepTier: 0 } as const;
+    const tight = patchSyndicate(createInitialGameState(1), 'ai_1', { dirtyCash: 1500 + floor - 1 });
+    const ok = patchSyndicate(createInitialGameState(1), 'ai_1', { dirtyCash: 1500 + floor });
+    expect(scoreCandidateAction(tight, 'ai_1', seize).scores.totalScore).toBe(-999);
+    expect(scoreCandidateAction(tight, 'ai_1', seize).reasoning).toContain('Liquidity clamp');
+    expect(scoreCandidateAction(ok, 'ai_1', seize).scores.emergencyModifiers).toBe(0);
+  });
+
+  it('counts the payroll of the recruits themselves', () => {
+    // thug x1: $800 hire + $250/wk. Floor = 1000 + 250 + reserve.
+    const recruit = { type: 'RECRUIT', tier: 'thug', count: 1 } as const;
+    const need = 800 + 1000 + 250 + AI_CASH_RESERVE;
+    const tight = patchSyndicate(createInitialGameState(1), 'ai_1', { dirtyCash: need - 1 });
+    const ok = patchSyndicate(createInitialGameState(1), 'ai_1', { dirtyCash: need });
+    expect(scoreCandidateAction(tight, 'ai_1', recruit).scores.totalScore).toBe(-999);
+    expect(scoreCandidateAction(ok, 'ai_1', recruit).scores.totalScore).not.toBe(-999);
+  });
+
+  it('does not count Sunday racket yield toward the floor (a rival can seize it first)', () => {
+    let state = giveRackets(createInitialGameState(1), 'ai_1', ['grand_casino']);
+    state = patchSyndicate(state, 'ai_1', { dirtyCash: 2000 });
+    expect(calculateProjectedRacketYield('ai_1', state.rackets)).toBeGreaterThan(5000);
+    const scored = scoreCandidateAction(state, 'ai_1', {
+      type: 'SEIZE',
+      racketId: 'fish_market',
+      prepTier: 0,
+    });
+    expect(scored.scores.totalScore).toBe(-999);
+  });
+
+  it('lets an emergency self-BRIBE dip into the reserve, but never below payroll', () => {
+    const bribe = { type: 'BRIBE', useClean: true } as const;
+    // $3,000 bribe + $1,000 payroll = $4,000 on hand: allowed only in a heat emergency.
+    const hot = patchSyndicate(createInitialGameState(1), 'ai_1', {
+      heat: 85,
+      cleanCash: 3000,
+      dirtyCash: 1000,
+    });
+    const calm = patchSyndicate(hot, 'ai_1', { heat: 50 });
+    expect(scoreCandidateAction(hot, 'ai_1', bribe).scores.emergencyModifiers).toBe(75);
+    expect(scoreCandidateAction(calm, 'ai_1', bribe).scores.totalScore).toBe(-999);
+    const broke = patchSyndicate(hot, 'ai_1', { dirtyCash: 999 });
+    expect(scoreCandidateAction(broke, 'ai_1', bribe).scores.totalScore).toBe(-999);
+  });
+});
+
+describe('W3-T8a — no empty-crew jobs', () => {
+  it('generates no EXTORT or SEIZE for a syndicate with 0 crew, but still RECRUIT and PASS', () => {
+    const state = patchSyndicate(createInitialGameState(1), 'ai_1', {
+      crew: { thug: 0, enforcer: 0, hitman: 0 },
+      dirtyCash: 20000,
+    });
+    const actions = generateCandidateActions(state, 'ai_1');
+    expect(actions.some((a) => a.type === 'EXTORT' || a.type === 'SEIZE')).toBe(false);
+    expect(actions.some((a) => a.type === 'RECRUIT')).toBe(true);
+    expect(actions.some((a) => a.type === 'PASS')).toBe(true);
+  });
+
+  it('does not change the rules: applyAction still accepts a 0-crew EXTORT', () => {
+    const state = patchSyndicate(createInitialGameState(1), 'player', {
+      crew: { thug: 0, enforcer: 0, hitman: 0 },
+    });
+    const { result } = applyAction(state, 'player', { type: 'EXTORT', jobId: 'shakedown', prepTier: 0 });
+    expect(result.executed).toBe(true);
+  });
+});
+
+describe('W3-T8a — decay-aware heat risk', () => {
+  it('treats EXTORT heat as free while heat stays at or below AI_SAFE_HEAT', () => {
+    const job = { type: 'EXTORT', jobId: 'shakedown', prepTier: 0 } as const;
+    const cool = patchSyndicate(createInitialGameState(1), 'ai_1', { heat: 5 });
+    const warm = patchSyndicate(createInitialGameState(1), 'ai_1', { heat: AI_SAFE_HEAT + 5 });
+    expect(scoreCandidateAction(cool, 'ai_1', job).scores.heatRiskScore).toBe(0);
+    expect(scoreCandidateAction(warm, 'ai_1', job).scores.heatRiskScore).toBeGreaterThan(0);
+  });
+});
+
+describe('W3-T8a — RICO projection emergency', () => {
+  it('gives self-BRIBE the AI_RICO_EMERGENCY override when Sunday heat is projected to reach 100', () => {
+    let state = giveRackets(createInitialGameState(1), 'ai_1', [
+      'grand_casino',
+      'penthouse_lounge',
+      'city_hall_annex',
+    ]);
+    state = patchSyndicate(state, 'ai_1', { heat: 95, cleanCash: 50000, dirtyCash: 50000 });
+    expect(projectSundayHeat('ai_1', 95, state.rackets)).toBe(100);
+    const bribe = scoreCandidateAction(state, 'ai_1', { type: 'BRIBE', useClean: true });
+    expect(bribe.scores.emergencyModifiers).toBe(AI_RICO_EMERGENCY);
+    expect(bribe.reasoning).toContain('RICO');
+  });
+
+  it('makes even a Warlord bribe before expanding when RICO is projected', () => {
+    let state = giveRackets(createInitialGameState(1), 'ai_1', [
+      'grand_casino',
+      'penthouse_lounge',
+      'city_hall_annex',
+      'scrap_yard',
+    ]);
+    state = patchSyndicate(state, 'ai_1', { heat: 92, cleanCash: 60000, dirtyCash: 60000 });
+    const top = evaluateCandidateActions(state, 'ai_1')[0]!;
+    expect(top.action).toEqual({ type: 'BRIBE', useClean: true });
+  });
+
+  it('keeps the plain +75 when heat >= 80 but no RICO strike is projected', () => {
+    const state = patchSyndicate(createInitialGameState(1), 'ai_1', { heat: 85, cleanCash: 10000 });
+    expect(projectSundayHeat('ai_1', 85, state.rackets)).toBeLessThan(100);
+    const bribe = scoreCandidateAction(state, 'ai_1', { type: 'BRIBE', useClean: true });
+    expect(bribe.scores.emergencyModifiers).toBe(75);
+  });
+});
+
+describe('W3-T8a — +65 goes to the single best safe job only', () => {
+  it('awards +65 to exactly one EXTORT candidate in a payroll emergency', () => {
+    const state = patchSyndicate(createInitialGameState(1), 'ai_1', { dirtyCash: 500, cleanCash: 0 });
+    const ranked = evaluateCandidateActions(state, 'ai_1');
+    const boosted = ranked.filter((r) => r.scores.emergencyModifiers === 65);
+    expect(boosted).toHaveLength(1);
+    expect(buildScoringContext(state, 'ai_1').bestEmergencyJobKey).toBe('shakedown_0');
+    expect(boosted[0]!.action).toEqual({ type: 'EXTORT', jobId: 'shakedown', prepTier: 0 });
+  });
+});
+
+describe('W3-T8a — RECRUIT earning-power lookahead', () => {
+  it('bestJobEV is 0 with no crew or no safe, repeatable job, and never decreases with attack', () => {
+    expect(bestJobEV(0)).toBe(0);
+    expect(bestJobEV(3)).toBe(0); // 1 thug: no job reaches 60% win
+    let prev = 0;
+    for (let attack = 0; attack <= 60; attack += 3) {
+      const ev = bestJobEV(attack);
+      expect(ev).toBeGreaterThanOrEqual(prev);
+      prev = ev;
+    }
+  });
+
+  it('values rebuilding a gutted crew but not padding a full one', () => {
+    const gutted = patchSyndicate(createInitialGameState(1), 'ai_1', {
+      crew: { thug: 0, enforcer: 0, hitman: 0 },
+      dirtyCash: 10000,
+    });
+    const three = scoreCandidateAction(gutted, 'ai_1', { type: 'RECRUIT', tier: 'thug', count: 3 });
+    const one = scoreCandidateAction(gutted, 'ai_1', { type: 'RECRUIT', tier: 'thug', count: 1 });
+    expect(three.scores.evScore).toBeGreaterThan(0);
+    expect(one.scores.evScore).toBeLessThan(0);
+
+    const full = patchSyndicate(createInitialGameState(1), 'ai_1', { dirtyCash: 10000 });
+    const pad = scoreCandidateAction(full, 'ai_1', { type: 'RECRUIT', tier: 'thug', count: 1 });
+    expect(pad.scores.evScore).toBeLessThan(0);
+  });
+});
+
+describe('W3-T8a — selection is unchanged by the linear scan', () => {
+  it('selectBestAIAction picks evaluateCandidateActions()[0] across varied states', () => {
+    for (const seed of [1, 7, 42, 99]) {
+      let state = createInitialGameState(seed);
+      for (let step = 0; step < 6; step++) {
+        for (const id of ['player', 'ai_1', 'ai_2', 'ai_3']) {
+          if (state.syndicates[id]!.isEliminated || state.isGameOver) continue;
+          const ranked = evaluateCandidateActions(state, id);
+          if (ranked.length === 0) continue; // out of AP this week
+          const { action } = selectBestAIAction(state, id);
+          expect(action).toEqual(ranked[0]!.action);
+          state = executeAIAction(state, id).state;
+        }
+        if (step % 3 === 2) state = advanceWeek(state);
+      }
     }
   });
 });
