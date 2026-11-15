@@ -11,6 +11,8 @@
     "isolatedModules": true,
     "moduleDetection": "force",
     "noEmit": true,
+    "resolveJsonModule": true,
+    "types": ["node"],
 
     /* Strict Type-Checking Options */
     "strict": true,
@@ -21,5 +23,5 @@
     "noImplicitReturns": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["vite.config.ts", "eslint.config.js"]
+  "include": ["vite.config.ts", "eslint.config.js", "scripts"]
 }

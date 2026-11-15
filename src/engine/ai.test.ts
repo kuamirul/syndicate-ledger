@@ -569,6 +569,17 @@ describe('executeAITurn — botched rolls and input immutability', () => {
   });
 });
 
+describe('scoreCandidateAction — shared scoring context', () => {
+  it('produces identical scores with and without a precomputed context', () => {
+    const state = giveRackets(createInitialGameState(11), 'ai_2', ['fish_market', 'union_pier']);
+    for (const id of ['player', 'ai_1', 'ai_2']) {
+      for (const { action, scores } of evaluateCandidateActions(state, id)) {
+        expect(scoreCandidateAction(state, id, action).scores).toEqual(scores);
+      }
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
 // 11. executeAllAITurns — ordering and game-state integrity
 // ---------------------------------------------------------------------------
