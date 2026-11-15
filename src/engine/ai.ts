@@ -8,9 +8,15 @@ import {
   STREET_JOBS,
 } from '../data';
 import {
+  ACTION_POINTS_PER_WEEK,
+  AI_CASH_RESERVE,
+  AI_LOOKAHEAD_WEEKS,
+  AI_RICO_EMERGENCY,
+  AI_SAFE_HEAT,
   ASSAULT_BASE_COST,
   BRIBE_CLEAN_COST,
   BRIBE_DIRTY_COST,
+  LAUNDER_FEE_PCT,
   LAUNDER_MAX,
   WIRETAP_COST,
 } from './constants';
@@ -24,6 +30,7 @@ import {
   calculateProjectedRacketYield,
   calculateSyndicateValuation,
   countOwnedRackets,
+  projectSundayHeat,
 } from './reducer';
 import type { ActionResult } from './reducer';
 import { calculateRiskProbabilities, PREP_CONFIG } from './risk';
@@ -33,8 +40,78 @@ import type {
   DecisionTrace,
   DecisionTraceScores,
   GameState,
+  PrepTier,
   RacketState,
+  StreetJobDef,
 } from './types';
+
+const PREP_TIERS: readonly PrepTier[] = [0, 1, 2];
+
+/**
+ * Net expected cash of one EXTORT attempt: E[payout] - prep - E[casualty replacement]
+ * (messy loses 1 unit, botched 2, valued at the $800 thug hire cost). Float; callers round.
+ */
+export function extortNetEV(attack: number, job: StreetJobDef, prepTier: PrepTier): number {
+  const probs = calculateRiskProbabilities(attack, job.difficultyDef, prepTier);
+  const expectedPayout = (probs.clean * job.cleanPayout + probs.messy * job.messyPayout) / 100;
+  const expectedCasualties = (probs.messy * 800 + probs.botched * 1600) / 100;
+  return expectedPayout - PREP_CONFIG[prepTier].cost - expectedCasualties;
+}
+
+/** SPEC §5.1 "safe" street job threshold: win (clean + messy) chance of at least 60%. */
+export const SAFE_JOB_WIN_PCT = 60;
+
+/** Expected heat per attempt a job may cost to count as repeatable weekly (= passive -5/wk decay). */
+export const SUSTAINABLE_JOB_HEAT = 5;
+
+/**
+ * Sustainable earning power of a crew: the best net EV among EXTORTs at `attack` that are both
+ * *safe* (>= 60% win, SPEC §5.1) and *repeatable* (expected heat per attempt <= the weekly decay),
+ * or 0 if none. Used only to value RECRUIT. Long-shot and high-heat jobs are excluded on purpose:
+ * the clamped risk floors make the vault job "+EV" even at attack 3, and big jobs look lucrative
+ * at high attack, but heat makes neither repeatable three times a week.
+ */
+export function bestJobEV(attack: number): number {
+  if (attack <= 0) return 0;
+  let best = 0;
+  for (const job of STREET_JOBS) {
+    for (const tier of PREP_TIERS) {
+      const probs = calculateRiskProbabilities(attack, job.difficultyDef, tier);
+      if (probs.clean + probs.messy < SAFE_JOB_WIN_PCT) continue;
+      const expectedHeat =
+        (probs.clean * job.cleanHeat + probs.messy * job.messyHeat + probs.botched * job.botchedHeat) / 100;
+      if (expectedHeat > SUSTAINABLE_JOB_HEAT) continue;
+      const ev = extortNetEV(attack, job, tier);
+      if (ev > best) best = ev;
+    }
+  }
+  return best;
+}
+
+/**
+ * Cash an action commits up front, before any payout (LAUNDER: the fee it destroys).
+ * Used by the AI liquidity guard; mirrors the costs charged in applyAction().
+ */
+export function upfrontCost(action: Action): number {
+  switch (action.type) {
+    case 'EXTORT':
+      return PREP_CONFIG[action.prepTier].cost;
+    case 'SEIZE':
+      return ASSAULT_BASE_COST + PREP_CONFIG[action.prepTier].cost;
+    case 'RECRUIT': {
+      const tierDef = CREW_BY_ID[action.tier];
+      return tierDef ? action.count * tierDef.hireCost : 0;
+    }
+    case 'LAUNDER':
+      return action.amount - Math.floor((action.amount * (100 - LAUNDER_FEE_PCT)) / 100);
+    case 'BRIBE':
+      return action.useClean ? BRIBE_CLEAN_COST : BRIBE_DIRTY_COST;
+    case 'WIRETAP':
+      return WIRETAP_COST;
+    case 'PASS':
+      return 0;
+  }
+}
 
 /**
  * Checks if a syndicate is the citywide leader (holds >= 5 rackets).
@@ -73,9 +150,12 @@ export function generateCandidateActions(
 
   const actions: Action[] = [];
   const ownedRacketsCount = countOwnedRackets(actor.id, state.rackets);
+  // The AI never sends an empty crew on a job or assault (AI judgement, not a game rule:
+  // the floored risk odds would otherwise make 0-crew vault jobs and assaults "+EV").
+  const hasCrew = calculateTotalCrewCount(actor.crew) > 0;
 
   // 1. EXTORT actions (6 jobs x affordable prep tiers)
-  for (const job of STREET_JOBS) {
+  for (const job of hasCrew ? STREET_JOBS : []) {
     // Prep Tier 0: free
     actions.push({ type: 'EXTORT', jobId: job.id, prepTier: 0 });
 
@@ -91,7 +171,7 @@ export function generateCandidateActions(
   }
 
   // 2. SEIZE actions (Rival or Neutral rackets x affordable prep tiers)
-  for (const racket of Object.values(state.rackets)) {
+  for (const racket of hasCrew ? Object.values(state.rackets) : []) {
     // Cannot attack own racket
     if (racket.ownerId === actor.id) continue;
 
@@ -177,6 +257,73 @@ export function generateCandidateActions(
 export interface ScoringContext {
   leaderId: string | null;
   projectedYield: number;
+  attack: number;
+  payroll: number;
+  totalCash: number;
+  ownedCount: number;
+  /** Rackets the actor owns per district, and rackets per district. */
+  ownedInDistrict: Record<string, number>;
+  districtSize: Record<string, number>;
+  projectedSundayHeat: number;
+  /** Earning power at the actor's current attack (see bestJobEV). */
+  currentBestJobEV: number;
+  /** `${jobId}_${prepTier}` of the single best >=60%-win EXTORT the actor can afford, if any. */
+  bestEmergencyJobKey: string | null;
+}
+
+/** Builds the per-state ScoringContext for one syndicate. */
+export function buildScoringContext(state: GameState, syndicateId: string): ScoringContext {
+  const actor = state.syndicates[syndicateId]!;
+  const attack = calculateSyndicateAttack(actor.crew);
+  const payroll = calculateSyndicatePayroll(actor.crew);
+  const totalCash = actor.dirtyCash + actor.cleanCash;
+
+  const ownedInDistrict: Record<string, number> = {};
+  const districtSize: Record<string, number> = {};
+  let ownedCount = 0;
+  for (const racket of Object.values(state.rackets)) {
+    districtSize[racket.district] = (districtSize[racket.district] ?? 0) + 1;
+    if (racket.ownerId === syndicateId) {
+      ownedCount++;
+      ownedInDistrict[racket.district] = (ownedInDistrict[racket.district] ?? 0) + 1;
+    }
+  }
+
+  // SPEC §5.1: the +65 goes to the single highest-EV EXTORT with >= 60% win chance, among jobs
+  // the actor could actually run (prep affordable and within the liquidity guard).
+  let bestEmergencyJobKey: string | null = null;
+  let bestEmergencyEV = -Infinity;
+  if (attack > 0) {
+    for (const job of STREET_JOBS) {
+      for (const tier of PREP_TIERS) {
+        const prepCost = PREP_CONFIG[tier].cost;
+        if (prepCost > 0 && (actor.dirtyCash < prepCost || totalCash - prepCost < payroll + AI_CASH_RESERVE)) {
+          continue;
+        }
+        const probs = calculateRiskProbabilities(attack, job.difficultyDef, tier);
+        if (probs.clean + probs.messy < SAFE_JOB_WIN_PCT) continue;
+        const ev = extortNetEV(attack, job, tier);
+        if (ev > bestEmergencyEV) {
+          bestEmergencyEV = ev;
+          bestEmergencyJobKey = `${job.id}_${tier}`;
+        }
+      }
+    }
+  }
+
+  return {
+    leaderId: findCityLeader(state.rackets),
+    projectedYield: calculateProjectedRacketYield(syndicateId, state.rackets),
+    attack,
+    payroll,
+    totalCash,
+    ownedCount,
+    ownedInDistrict,
+    districtSize,
+    projectedSundayHeat: projectSundayHeat(syndicateId, actor.heat, state.rackets),
+    currentBestJobEV: bestJobEV(attack),
+    bestEmergencyJobKey,
+  };
 }
 
 export interface ScoredAction {
@@ -204,13 +351,15 @@ export function scoreCandidateAction(
     revenge: 1.0,
   };
 
-  const actorAttack = calculateSyndicateAttack(actor.crew);
-  const payroll = calculateSyndicatePayroll(actor.crew);
-  const projectedYield = ctx?.projectedYield ?? calculateProjectedRacketYield(actor.id, state.rackets);
-  const projectedSundayCash = actor.dirtyCash + actor.cleanCash + projectedYield;
+  const c = ctx ?? buildScoringContext(state, syndicateId);
+  const actorAttack = c.attack;
+  const payroll = c.payroll;
+  const projectedSundayCash = c.totalCash + c.projectedYield;
   const isPayrollEmergency = projectedSundayCash < payroll;
   const isHeatEmergency = actor.heat >= 80;
-  const leaderId = ctx ? ctx.leaderId : findCityLeader(state.rackets);
+  // RICO strike projected for this Sunday if nothing is done about Heat.
+  const isRicoEmergency = c.projectedSundayHeat >= 100;
+  const leaderId = c.leaderId;
 
   let evScore = 0;
   let turfScore = 0;
@@ -225,24 +374,18 @@ export function scoreCandidateAction(
       const job = JOBS_BY_ID[action.jobId];
       if (!job) break;
 
-      const prepCost = PREP_CONFIG[action.prepTier].cost;
       const probs = calculateRiskProbabilities(actorAttack, job.difficultyDef, action.prepTier);
-      const pClean = probs.clean / 100;
-      const pMessy = probs.messy / 100;
-      const pBotched = probs.botched / 100;
-
-      // Expected gross payout
-      const expectedPayout = pClean * job.cleanPayout + pMessy * job.messyPayout;
-      // Casualty expected replacement cost ($800 base thug cost)
-      const expectedCasualties = pMessy * 800 + pBotched * 1600;
-      const netEV = expectedPayout - prepCost - expectedCasualties;
+      const netEV = extortNetEV(actorAttack, job, action.prepTier);
       evScore = Math.round(netEV / 100);
 
       // Expected heat generation
       const expectedHeatDelta =
         (probs.clean * job.cleanHeat + probs.messy * job.messyHeat + probs.botched * job.botchedHeat) /
         100;
-      heatRiskScore = Math.round(expectedHeatDelta * 2);
+      // Heat that stays at or below AI_SAFE_HEAT is effectively free: it decays -5/wk and is far
+      // from the 70 raid line. Above it, every expected point of heat costs 2 utility.
+      heatRiskScore =
+        actor.heat + expectedHeatDelta <= AI_SAFE_HEAT ? 0 : Math.round(expectedHeatDelta * 2);
 
       // Extra penalty if pushing heat toward 70 (raid) or 90+ (RICO)
       if (actor.heat >= 70) {
@@ -255,9 +398,10 @@ export function scoreCandidateAction(
         heatRiskScore += 50;
       }
 
-      // Hard Survival Override: If projected Sunday cash < Payroll, safe EXTORT (>60% win) gets +65
+      // Hard Survival Override: If projected Sunday cash < Payroll, the single highest-EV
+      // EXTORT with >= 60% win chance gets +65 (SPEC §5.1).
       const pWin = probs.clean + probs.messy;
-      if (isPayrollEmergency && pWin >= 60) {
+      if (isPayrollEmergency && c.bestEmergencyJobKey === `${action.jobId}_${action.prepTier}`) {
         emergencyModifiers = 65;
         reasoning = `Emergency payroll solvency: Extorting ${job.name} (EV $${Math.round(netEV)}, Win ${pWin}%) to avoid insolvency`;
       } else {
@@ -291,9 +435,9 @@ export function scoreCandidateAction(
       turfScore = isRival ? 35 : 25;
 
       // District Monopoly check: Would this capture complete the district?
-      const districtRackets = Object.values(state.rackets).filter((r) => r.district === racket.district);
-      const currentlyOwnedInDistrict = districtRackets.filter((r) => r.ownerId === actor.id).length;
-      if (currentlyOwnedInDistrict === districtRackets.length - 1) {
+      const districtRacketCount = c.districtSize[racket.district] ?? 0;
+      const currentlyOwnedInDistrict = c.ownedInDistrict[racket.district] ?? 0;
+      if (currentlyOwnedInDistrict === districtRacketCount - 1) {
         // Completing district monopoly!
         turfScore += 40;
       } else if (currentlyOwnedInDistrict === 1) {
@@ -306,8 +450,7 @@ export function scoreCandidateAction(
       }
 
       // Near domination win: if actor currently owns >= 6 rackets
-      const currentOwnedCount = countOwnedRackets(actor.id, state.rackets);
-      if (currentOwnedCount >= 6) {
+      if (c.ownedCount >= 6) {
         turfScore += 60;
       }
 
@@ -354,8 +497,15 @@ export function scoreCandidateAction(
       const tierDef = CREW_BY_ID[action.tier];
       const totalHireCost = action.count * tierDef.hireCost;
 
-      // Economic investment cost
-      evScore = -Math.round(totalHireCost / 200);
+      // Marginal earning power over the lookahead horizon: how much better the best street job
+      // becomes with the added attack (x 3 AP/wk), minus hire cost and the extra payroll.
+      const newAttack = actorAttack + action.count * tierDef.attack;
+      const earningGain = bestJobEV(newAttack) - c.currentBestJobEV;
+      const netEV =
+        earningGain * ACTION_POINTS_PER_WEEK * AI_LOOKAHEAD_WEEKS -
+        totalHireCost -
+        action.count * tierDef.weeklyPayroll * AI_LOOKAHEAD_WEEKS;
+      evScore = Math.round(netEV / 100);
 
       // Turf Score: Added combat strength enables turf expansion and defense
       const combatPower = action.count * (tierDef.attack + tierDef.defense);
@@ -371,7 +521,7 @@ export function scoreCandidateAction(
         emergencyModifiers = -999;
         reasoning = `Survival clamp: Cannot recruit ${action.count}x ${tierDef.name} due to Sunday payroll deficit`;
       } else {
-        reasoning = `Recruiting ${action.count}x ${tierDef.name} for combat strength (Power +${combatPower})`;
+        reasoning = `Recruiting ${action.count}x ${tierDef.name} for combat strength (Power +${combatPower}, ${AI_LOOKAHEAD_WEEKS}-wk net EV $${Math.round(netEV)})`;
       }
       break;
     }
@@ -405,8 +555,12 @@ export function scoreCandidateAction(
         // Subtracted in TotalScore: - (HeatRisk_Score * caution), so negative score becomes a bonus
         heatRiskScore = actor.heat >= 60 ? -60 : -35;
 
-        // Hard Survival Override: Heat >= 80 gives +75 emergency utility
-        if (isHeatEmergency) {
+        // Hard Survival Override: Heat >= 80 gives +75 emergency utility; a RICO strike projected
+        // for this Sunday makes the bribe outrank everything (AI_RICO_EMERGENCY).
+        if (isRicoEmergency) {
+          emergencyModifiers = AI_RICO_EMERGENCY;
+          reasoning = `RICO emergency: Heat ${actor.heat}% projected to hit 100 this Sunday (+${AI_RICO_EMERGENCY} Emergency)`;
+        } else if (isHeatEmergency) {
           emergencyModifiers = 75;
           reasoning = `Emergency Heat reduction: Heat at ${actor.heat}% poses immediate RICO indictment danger (+75 Emergency)`;
         } else {
@@ -460,6 +614,23 @@ export function scoreCandidateAction(
       coalitionBonus = 0;
       reasoning = 'Passing Action Point (preserving resources)';
       break;
+    }
+  }
+
+  // Liquidity guard (AI judgement, symmetric rules): never commit cash that would leave less than
+  // payroll (incl. any new hires) + AI_CASH_RESERVE on hand. Sunday yield is not counted because a
+  // rival can seize the racket before Sunday. A self-BRIBE in a heat/RICO emergency only has to
+  // keep payroll covered.
+  const cost = upfrontCost(action);
+  if (cost > 0 && emergencyModifiers > -900) {
+    const addedPayroll =
+      action.type === 'RECRUIT' ? action.count * CREW_BY_ID[action.tier].weeklyPayroll : 0;
+    const isSelfBribeEmergency =
+      action.type === 'BRIBE' && !action.targetSyndicateId && (isHeatEmergency || isRicoEmergency);
+    const floor = payroll + addedPayroll + (isSelfBribeEmergency ? 0 : AI_CASH_RESERVE);
+    if (c.totalCash - cost < floor) {
+      emergencyModifiers = -999;
+      reasoning = `Liquidity clamp: spending $${cost} would leave less than $${floor} for payroll + reserve (${reasoning})`;
     }
   }
 
@@ -540,48 +711,52 @@ function getActionTieKey(action: Action): string {
 }
 
 /**
+ * Deterministic ranking: TotalScore desc, then action-type priority desc, then tie key asc.
+ * Negative when `a` ranks ahead of `b`.
+ */
+export function compareScoredActions(a: ScoredAction, b: ScoredAction): number {
+  if (b.scores.totalScore !== a.scores.totalScore) {
+    return b.scores.totalScore - a.scores.totalScore;
+  }
+  const prioA = getActionTypePriority(a.action.type);
+  const prioB = getActionTypePriority(b.action.type);
+  if (prioB !== prioA) {
+    return prioB - prioA;
+  }
+  return getActionTieKey(a.action).localeCompare(getActionTieKey(b.action));
+}
+
+function scoreAllCandidates(state: GameState, syndicateId: string): ScoredAction[] {
+  const candidates = generateCandidateActions(state, syndicateId);
+  if (candidates.length === 0) return [];
+  const ctx = buildScoringContext(state, syndicateId);
+  return candidates.map((action) => scoreCandidateAction(state, syndicateId, action, ctx));
+}
+
+/**
  * Evaluates and scores all legal candidate actions, sorted by TotalScore descending.
  */
 export function evaluateCandidateActions(
   state: GameState,
   syndicateId: string
 ): ScoredAction[] {
-  const candidates = generateCandidateActions(state, syndicateId);
-  const ctx: ScoringContext = {
-    leaderId: findCityLeader(state.rackets),
-    projectedYield: calculateProjectedRacketYield(syndicateId, state.rackets),
-  };
-  const scored = candidates.map((action) =>
-    scoreCandidateAction(state, syndicateId, action, ctx)
-  );
-
-  scored.sort((a, b) => {
-    // 1. TotalScore descending
-    if (b.scores.totalScore !== a.scores.totalScore) {
-      return b.scores.totalScore - a.scores.totalScore;
-    }
-    // 2. Action Type priority descending
-    const prioA = getActionTypePriority(a.action.type);
-    const prioB = getActionTypePriority(b.action.type);
-    if (prioB !== prioA) {
-      return prioB - prioA;
-    }
-    // 3. Deterministic tie key lexicographical ascending
-    return getActionTieKey(a.action).localeCompare(getActionTieKey(b.action));
-  });
-
-  return scored;
+  return scoreAllCandidates(state, syndicateId).sort(compareScoredActions);
 }
 
 /**
  * Selects the single highest utility action for a syndicate and produces a logged DecisionTrace.
+ * Linear scan with the same comparator as evaluateCandidateActions (identical pick, no full sort).
  */
 export function selectBestAIAction(
   state: GameState,
   syndicateId: string
 ): { action: Action; trace: DecisionTrace } {
-  const scored = evaluateCandidateActions(state, syndicateId);
-  const best = scored[0] ?? {
+  const scored = scoreAllCandidates(state, syndicateId);
+  let top: ScoredAction | undefined;
+  for (const candidate of scored) {
+    if (!top || compareScoredActions(candidate, top) < 0) top = candidate;
+  }
+  const best = top ?? {
     action: { type: 'PASS' } as Action,
     scores: {
       evScore: 0,

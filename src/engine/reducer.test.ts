@@ -6,6 +6,7 @@ import {
   countOwnedRackets,
   createInitialGameState,
   hasDistrictMonopoly,
+  projectSundayHeat,
 } from './reducer';
 
 describe('Weekly Turn Flow & Reducer Engine', () => {
@@ -358,6 +359,40 @@ describe('Weekly Turn Flow & Reducer Engine', () => {
       const next2 = advanceWeek(state2);
 
       expect(next1).toEqual(next2);
+    });
+  });
+
+  describe('W3-T8a — projectSundayHeat & LAST_STANDING', () => {
+    it('projectSundayHeat matches the heat advanceWeek actually applies', () => {
+      const cases: Array<{ heat: number; rackets: string[] }> = [
+        { heat: 10, rackets: [] },
+        { heat: 2, rackets: [] }, // clamps at 0
+        { heat: 40, rackets: ['fish_market', 'dive_bar'] },
+        { heat: 60, rackets: ['grand_casino', 'penthouse_lounge', 'city_hall_annex', 'scrap_yard', 'trucking_depot'] },
+        { heat: 97, rackets: ['grand_casino', 'penthouse_lounge', 'city_hall_annex'] }, // clamps at 100
+      ];
+      for (const c of cases) {
+        const state = createInitialGameState(5);
+        state.syndicates.player!.heat = c.heat;
+        state.syndicates.player!.dirtyCash = 100000; // keep payroll/raids irrelevant to heat
+        for (const id of c.rackets) state.rackets[id]!.ownerId = 'player';
+        const expected = projectSundayHeat('player', c.heat, state.rackets);
+        expect(advanceWeek(state).syndicates.player!.heat).toBe(expected);
+      }
+      const docks = createInitialGameState(5);
+      expect(projectSundayHeat('player', 2, docks.rackets)).toBe(0);
+    });
+
+    it('labels a sole survivor LAST_STANDING, not DOMINATION', () => {
+      const state = createInitialGameState(42);
+      for (const id of ['ai_1', 'ai_2', 'ai_3']) {
+        state.syndicates[id]!.isEliminated = true;
+        state.syndicates[id]!.eliminationReason = 'INSOLVENT';
+      }
+      const next = advanceWeek(state);
+      expect(next.isGameOver).toBe(true);
+      expect(next.winnerId).toBe('player');
+      expect(next.winReason).toBe('LAST_STANDING');
     });
   });
 });

@@ -104,6 +104,10 @@ export interface SimReport {
   gamesWithInsolvency: number;
   /** Share of all syndicate-seats eliminated by insolvency (0–100, 1 decimal). */
   seatInsolvencyRate: number;
+  /** Share of all syndicate-seats eliminated as WIPED_OUT (0–100, 1 decimal). */
+  seatWipedOutRate: number;
+  /** Share of games with at least one INSOLVENT or WIPED_OUT seat (0–100, 1 decimal). */
+  gamesWithBankruptcy: number;
   archetypes: Record<string, ArchetypeStats>;
 }
 
@@ -118,7 +122,7 @@ export function runSimulation(games: number, baseSeed: number): SimReport {
       eliminations: { RICO: 0, INSOLVENT: 0, WIPED_OUT: 0 },
     };
   }
-  const winReasons: Record<WinReason, number> = { DOMINATION: 0, VALUATION: 0 };
+  const winReasons: Record<WinReason, number> = { DOMINATION: 0, VALUATION: 0, LAST_STANDING: 0 };
   const eliminationReasons: Record<EliminationReason, number> = {
     RICO: 0,
     INSOLVENT: 0,
@@ -127,6 +131,7 @@ export function runSimulation(games: number, baseSeed: number): SimReport {
   let totalWeeks = 0;
   let noWinner = 0;
   let insolventGames = 0;
+  let bankruptGames = 0;
 
   for (let i = 0; i < games; i++) {
     const g = playGame((baseSeed + i) | 0, i);
@@ -134,6 +139,7 @@ export function runSimulation(games: number, baseSeed: number): SimReport {
     if (g.winnerId === null) noWinner++;
     if (g.winReason) winReasons[g.winReason]++;
     let hadInsolvency = false;
+    let hadBankruptcy = false;
     for (const seat of SEAT_IDS) {
       const arch = g.seatArchetypes[seat]!;
       const stats = archetypes[arch]!;
@@ -144,9 +150,11 @@ export function runSimulation(games: number, baseSeed: number): SimReport {
         stats.eliminations[reason]++;
         eliminationReasons[reason]++;
         if (reason === 'INSOLVENT') hadInsolvency = true;
+        if (reason === 'INSOLVENT' || reason === 'WIPED_OUT') hadBankruptcy = true;
       }
     }
     if (hadInsolvency) insolventGames++;
+    if (hadBankruptcy) bankruptGames++;
   }
 
   return {
@@ -158,6 +166,8 @@ export function runSimulation(games: number, baseSeed: number): SimReport {
     eliminationReasons,
     gamesWithInsolvency: pct(insolventGames, games),
     seatInsolvencyRate: pct(eliminationReasons.INSOLVENT, games * SEAT_IDS.length),
+    seatWipedOutRate: pct(eliminationReasons.WIPED_OUT, games * SEAT_IDS.length),
+    gamesWithBankruptcy: pct(bankruptGames, games),
     archetypes,
   };
 }
@@ -178,7 +188,8 @@ export function formatReport(r: SimReport, elapsedMs?: number): string {
   }
   lines.push('');
   lines.push(
-    `Win reasons: DOMINATION ${r.winReasons.DOMINATION}, VALUATION ${r.winReasons.VALUATION}`
+    `Win reasons: DOMINATION ${r.winReasons.DOMINATION}, VALUATION ${r.winReasons.VALUATION}, ` +
+      `LAST_STANDING ${r.winReasons.LAST_STANDING}`
   );
   lines.push(
     `Eliminations: RICO ${r.eliminationReasons.RICO}, INSOLVENT ${r.eliminationReasons.INSOLVENT}, ` +
@@ -186,6 +197,9 @@ export function formatReport(r: SimReport, elapsedMs?: number): string {
   );
   lines.push(
     `Insolvency: ${r.seatInsolvencyRate}% of seats, ${r.gamesWithInsolvency}% of games`
+  );
+  lines.push(
+    `Wiped out: ${r.seatWipedOutRate}% of seats   Any bankruptcy (insolvent or wiped): ${r.gamesWithBankruptcy}% of games`
   );
   return lines.join('\n');
 }

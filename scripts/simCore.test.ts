@@ -29,7 +29,9 @@ describe('sim core', () => {
 
     const wins = Object.values(r1.archetypes).reduce((s, a) => s + a.wins, 0);
     expect(wins + r1.noWinner).toBe(25);
-    expect(r1.winReasons.DOMINATION + r1.winReasons.VALUATION + r1.noWinner).toBe(25);
+    expect(
+      r1.winReasons.DOMINATION + r1.winReasons.VALUATION + r1.winReasons.LAST_STANDING + r1.noWinner
+    ).toBe(25);
     const appearances = Object.values(r1.archetypes).reduce((s, a) => s + a.appearances, 0);
     expect(appearances).toBe(25 * SEAT_IDS.length);
     const elim = Object.values(r1.eliminationReasons).reduce((s, n) => s + n, 0);
@@ -39,6 +41,15 @@ describe('sim core', () => {
         0
       )
     );
+  });
+
+  it('W3-T8a balance regression: insolvency stays under the M1 gate on a 200-game sample', () => {
+    // The full gate is `npm run sim` (1,000 games): < 5% insolvency (seats and games), every
+    // archetype 12–32% wins. This smaller sample guards the insolvency side in CI.
+    const r = runSimulation(200, 1);
+    expect(r.seatInsolvencyRate).toBeLessThan(5);
+    expect(r.gamesWithInsolvency).toBeLessThan(5);
+    expect(r.noWinner).toBe(0);
   });
 
   it('formatReport lists every archetype', () => {
