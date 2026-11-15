@@ -12,7 +12,7 @@ import {
   scoreCandidateAction,
   selectBestAIAction,
 } from './ai';
-import { createInitialGameState, countOwnedRackets } from './reducer';
+import { createInitialGameState } from './reducer';
 import type { GameState, SyndicateState } from './types';
 
 // ---------------------------------------------------------------------------
@@ -32,15 +32,6 @@ function patchSyndicate(
       [id]: { ...state.syndicates[id]!, ...patch },
     },
   };
-}
-
-/** Assign all 12 rackets to a given owner */
-function giveAllRackets(state: GameState, ownerId: string): GameState {
-  const rackets: GameState['rackets'] = {};
-  for (const [id, r] of Object.entries(state.rackets)) {
-    rackets[id] = { ...r, ownerId };
-  }
-  return { ...state, rackets };
 }
 
 /** Assign a specified number of racket ids to an owner */
@@ -604,7 +595,6 @@ describe('executeAllAITurns', () => {
     let state = createInitialGameState(314);
     for (let w = 0; w < 5; w++) {
       const { state: afterAI } = executeAllAITurns(state);
-      const { default: advanceWeek } = { default: null };
       // We just verify no exception is thrown and state is internally consistent
       expect(afterAI.week).toBe(state.week); // week only increments in advanceWeek
       state = afterAI;

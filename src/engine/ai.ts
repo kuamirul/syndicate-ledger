@@ -2,7 +2,6 @@
 
 import {
   ARCHETYPES_BY_ID,
-  CITY_RACKETS,
   CREW_BY_ID,
   CREW_TIERS,
   JOBS_BY_ID,
@@ -23,15 +22,11 @@ import {
 import type {
   Action,
   ArchetypeWeights,
-  CrewTierId,
   DecisionTrace,
   DecisionTraceScores,
-  DistrictId,
   GameState,
-  PrepTier,
   RacketState,
   SyndicateCrew,
-  SyndicateState,
 } from './types';
 
 /**
