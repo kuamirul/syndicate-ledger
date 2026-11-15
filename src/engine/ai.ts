@@ -173,6 +173,12 @@ export function generateCandidateActions(
   return actions;
 }
 
+/** Per-state values shared by every candidate of one evaluation (pure caching, no semantics). */
+export interface ScoringContext {
+  leaderId: string | null;
+  projectedYield: number;
+}
+
 export interface ScoredAction {
   action: Action;
   scores: DecisionTraceScores;
@@ -186,7 +192,8 @@ export interface ScoredAction {
 export function scoreCandidateAction(
   state: GameState,
   syndicateId: string,
-  action: Action
+  action: Action,
+  ctx?: ScoringContext
 ): ScoredAction {
   const actor = state.syndicates[syndicateId]!;
   const archetypeDef = actor.archetypeId ? ARCHETYPES_BY_ID[actor.archetypeId] : undefined;
@@ -199,11 +206,11 @@ export function scoreCandidateAction(
 
   const actorAttack = calculateSyndicateAttack(actor.crew);
   const payroll = calculateSyndicatePayroll(actor.crew);
-  const projectedYield = calculateProjectedRacketYield(actor.id, state.rackets);
+  const projectedYield = ctx?.projectedYield ?? calculateProjectedRacketYield(actor.id, state.rackets);
   const projectedSundayCash = actor.dirtyCash + actor.cleanCash + projectedYield;
   const isPayrollEmergency = projectedSundayCash < payroll;
   const isHeatEmergency = actor.heat >= 80;
-  const leaderId = findCityLeader(state.rackets);
+  const leaderId = ctx ? ctx.leaderId : findCityLeader(state.rackets);
 
   let evScore = 0;
   let turfScore = 0;
@@ -540,7 +547,13 @@ export function evaluateCandidateActions(
   syndicateId: string
 ): ScoredAction[] {
   const candidates = generateCandidateActions(state, syndicateId);
-  const scored = candidates.map((action) => scoreCandidateAction(state, syndicateId, action));
+  const ctx: ScoringContext = {
+    leaderId: findCityLeader(state.rackets),
+    projectedYield: calculateProjectedRacketYield(syndicateId, state.rackets),
+  };
+  const scored = candidates.map((action) =>
+    scoreCandidateAction(state, syndicateId, action, ctx)
+  );
 
   scored.sort((a, b) => {
     // 1. TotalScore descending
