@@ -13,5 +13,7 @@ describe('App Smoke Test', () => {
     expect(html).toContain('End Week');
     expect(html).toContain('Player Syndicate');
     expect(html).toContain('Clean');
+    expect(html).toContain('[Active Sieges]');
+    expect(html).toContain('Turf Upkeep');
   });
 });

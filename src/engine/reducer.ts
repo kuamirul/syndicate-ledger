@@ -7,8 +7,17 @@ import {
   BRIBE_DIRTY_COST,
   BRIBE_FRAME_HEAT,
   BRIBE_SELF_HEAT,
+  EMPIRE_FREE_RACKETS,
+  EMPIRE_HEAT_PER_RACKET,
+  GRUDGE_DECAY_PCT,
+  GRUDGE_MAX,
   LAUNDER_FEE_PCT,
   LAUNDER_MAX,
+  MAX_FRAMES_PER_WEEK,
+  MAX_OUTGOING_SIEGES,
+  MAX_WEEKS,
+  SIEGE_LEAD_WEEKS,
+  TURF_UPKEEP_BASE,
   WIRETAP_COST,
   WIRETAP_WEEKS,
 } from './constants';
@@ -23,7 +32,10 @@ import type {
   Action,
   DistrictId,
   GameState,
+  PrepTier,
   RacketState,
+  RiskOutcome,
+  Siege,
   SyndicateCrew,
   SyndicateSnapshot,
   SyndicateState,
@@ -64,7 +76,7 @@ export function calculateProjectedRacketYield(
 
 /**
  * Projects a syndicate's Heat after the Sunday passive step (SPEC §2):
- * `heat - 5 + Σ(owned racket passiveHeat) + max(0, (ownedRackets - 3) * 2)`, clamped to 0–100.
+ * `heat - 5 + Σ(owned racket passiveHeat) + max(0, (ownedRackets - 3) * 5)`, clamped to 0–100.
  * Single source of truth for advanceWeek() and the AI's RICO projection.
  */
 export function projectSundayHeat(
@@ -80,7 +92,7 @@ export function projectSundayHeat(
       racketPassiveHeat += racket.passiveHeat;
     }
   }
-  const empireHeatTax = Math.max(0, (ownedCount - 3) * 2);
+  const empireHeatTax = Math.max(0, (ownedCount - EMPIRE_FREE_RACKETS) * EMPIRE_HEAT_PER_RACKET);
   return clamp(heat - 5 + racketPassiveHeat + empireHeatTax, 0, 100);
 }
 
@@ -151,7 +163,7 @@ export function cloneGameState(state: GameState): GameState {
     ...state,
     syndicates,
     rackets,
-    activeSieges: [...state.activeSieges],
+    activeSieges: state.activeSieges.map((siege) => ({ ...siege })),
     history: [...state.history],
     decisionTraces: [...state.decisionTraces],
   };
@@ -189,6 +201,7 @@ export function createInitialGameState(seed: number = 42): GameState {
       isEliminated: false,
       grudge: {},
       wiretapTurnsRemaining: {},
+      framesThisWeek: 0,
     },
     ai_1: {
       id: 'ai_1',
@@ -205,6 +218,7 @@ export function createInitialGameState(seed: number = 42): GameState {
       isEliminated: false,
       grudge: {},
       wiretapTurnsRemaining: {},
+      framesThisWeek: 0,
     },
     ai_2: {
       id: 'ai_2',
@@ -221,6 +235,7 @@ export function createInitialGameState(seed: number = 42): GameState {
       isEliminated: false,
       grudge: {},
       wiretapTurnsRemaining: {},
+      framesThisWeek: 0,
     },
     ai_3: {
       id: 'ai_3',
@@ -237,6 +252,7 @@ export function createInitialGameState(seed: number = 42): GameState {
       isEliminated: false,
       grudge: {},
       wiretapTurnsRemaining: {},
+      framesThisWeek: 0,
     },
   };
 
@@ -265,6 +281,97 @@ export interface ActionResult {
   casualtiesLost?: number;
   roll?: number;
   outcome?: string;
+  /** True when a SEIZE on a rival-owned racket was queued as a 2-turn siege (no roll yet). */
+  queued?: boolean;
+  /** Week at whose start a queued siege resolves. */
+  resolveWeek?: number;
+}
+
+/** Adds grudge held by `holder` against `targetId`, clamped to 0..GRUDGE_MAX. MUTATES `holder`. */
+export function addGrudge(holder: SyndicateState, targetId: string, amount: number): void {
+  holder.grudge[targetId] = clamp((holder.grudge[targetId] ?? 0) + amount, 0, GRUDGE_MAX);
+}
+
+/** Sunday grudge cooling for one value (integer, reaches 0). */
+export function decayGrudge(grudge: number): number {
+  return Math.floor((grudge * (100 - GRUDGE_DECAY_PCT)) / 100);
+}
+
+/**
+ * Progressive Sunday Turf Upkeep (W3-T8b): TURF_UPKEEP_BASE * max(0, owned - 3)^2.
+ * 4 rackets: $600, 5: $2,400, 6: $5,400, 7: $9,600, 8: $15,000. Paid together with Crew Payroll.
+ */
+export function turfUpkeep(ownedRackets: number): number {
+  const over = Math.max(0, ownedRackets - EMPIRE_FREE_RACKETS);
+  return TURF_UPKEEP_BASE * over * over;
+}
+
+/** Deterministic siege id (no randomUUID in the engine). */
+export function siegeId(week: number, attackerId: string, racketId: string): string {
+  return `${week}:${attackerId}:${racketId}`;
+}
+
+interface AssaultResolution {
+  outcome: RiskOutcome;
+  roll: number;
+  seized: boolean;
+  casualtiesLost: number;
+}
+
+/**
+ * Resolves an assault on a racket: risk roll (attacker's current attack vs base defense + the
+ * owner's assigned guards), ownership transfer, damage, attacker casualties and defender grudge.
+ * Shared by instant SEIZE and siege resolution. MUTATES `state`, which must be a fresh clone.
+ */
+function resolveAssault(
+  state: GameState,
+  attackerId: string,
+  racketId: string,
+  prepTier: PrepTier
+): AssaultResolution {
+  const attacker = state.syndicates[attackerId]!;
+  const racket = state.rackets[racketId]!;
+
+  let defense = racket.baseDefense;
+  const previousOwnerId = racket.ownerId;
+  const previousOwner = previousOwnerId ? state.syndicates[previousOwnerId] : undefined;
+  if (previousOwner) {
+    defense += previousOwner.assignedGuards[racket.id] ?? 0;
+  }
+
+  const resolution = resolveRiskRoll(
+    calculateSyndicateAttack(attacker.crew),
+    defense,
+    prepTier,
+    state.rngState,
+    attacker.crew
+  );
+
+  state.rngState = resolution.nextRngState;
+  attacker.crew = resolution.casualties.remainingCrew;
+
+  let seized = false;
+  if (resolution.outcome === 'CLEAN') {
+    seized = true;
+    racket.ownerId = attackerId;
+    racket.damagedTurnsRemaining = 0;
+  } else if (resolution.outcome === 'MESSY') {
+    seized = true;
+    racket.ownerId = attackerId;
+    racket.damagedTurnsRemaining = 1;
+    if (previousOwner) {
+      addGrudge(previousOwner, attackerId, 15);
+    }
+  } else if (previousOwner) {
+    addGrudge(previousOwner, attackerId, 25);
+  }
+
+  return {
+    outcome: resolution.outcome,
+    roll: resolution.roll,
+    seized,
+    casualtiesLost: resolution.casualties.totalLost,
+  };
 }
 
 /**
@@ -368,6 +475,32 @@ export function applyAction(
         return { state: prevState, result: { executed: false, success: false, reason: 'Syndicate already owns this racket' } };
       }
 
+      // SEIZE on a rival-owned racket is a 2-turn Siege (SPEC §2): paid now, resolved later.
+      const isSiege = racket.ownerId !== null;
+      const resolveWeek = nextState.week + SIEGE_LEAD_WEEKS;
+      if (isSiege) {
+        if (resolveWeek > MAX_WEEKS) {
+          return {
+            state: prevState,
+            result: { executed: false, success: false, reason: `Too late to telegraph a siege (would resolve after week ${MAX_WEEKS})` },
+          };
+        }
+        const outgoing = nextState.activeSieges.filter((s) => s.attackerId === syndicateId);
+        if (outgoing.some((s) => s.racketId === racket.id)) {
+          return { state: prevState, result: { executed: false, success: false, reason: 'Already besieging this racket' } };
+        }
+        if (outgoing.length >= MAX_OUTGOING_SIEGES) {
+          return {
+            state: prevState,
+            result: {
+              executed: false,
+              success: false,
+              reason: `Too many sieges underway (max ${MAX_OUTGOING_SIEGES} at a time)`,
+            },
+          };
+        }
+      }
+
       const prep = PREP_CONFIG[action.prepTier];
       const totalCost = ASSAULT_BASE_COST + prep.cost;
 
@@ -377,58 +510,28 @@ export function applyAction(
 
       actor.dirtyCash -= totalCost;
 
-      const attack = calculateSyndicateAttack(actor.crew);
-      let defense = racket.baseDefense;
-
-      const previousOwnerId = racket.ownerId;
-      if (previousOwnerId && nextState.syndicates[previousOwnerId]) {
-        const rival = nextState.syndicates[previousOwnerId]!;
-        const assignedGuard = rival.assignedGuards[racket.id] ?? 0;
-        defense += assignedGuard;
+      if (isSiege) {
+        const siege: Siege = {
+          id: siegeId(nextState.week, syndicateId, racket.id),
+          attackerId: syndicateId,
+          racketId: racket.id,
+          prepTier: action.prepTier,
+          telegraphedWeek: nextState.week,
+          resolveWeek,
+        };
+        nextState.activeSieges.push(siege);
+        return { state: nextState, result: { executed: true, success: true, queued: true, resolveWeek } };
       }
 
-      const resolution = resolveRiskRoll(
-        attack,
-        defense,
-        action.prepTier,
-        nextState.rngState,
-        actor.crew
-      );
-
-      nextState.rngState = resolution.nextRngState;
-      actor.crew = resolution.casualties.remainingCrew;
-
-      let seized = false;
-
-      if (resolution.outcome === 'CLEAN') {
-        seized = true;
-        racket.ownerId = syndicateId;
-        racket.damagedTurnsRemaining = 0;
-      } else if (resolution.outcome === 'MESSY') {
-        seized = true;
-        racket.ownerId = syndicateId;
-        racket.damagedTurnsRemaining = 1;
-
-        if (previousOwnerId && nextState.syndicates[previousOwnerId]) {
-          const rival = nextState.syndicates[previousOwnerId]!;
-          rival.grudge[syndicateId] = (rival.grudge[syndicateId] ?? 0) + 15;
-        }
-      } else {
-        seized = false;
-        if (previousOwnerId && nextState.syndicates[previousOwnerId]) {
-          const rival = nextState.syndicates[previousOwnerId]!;
-          rival.grudge[syndicateId] = (rival.grudge[syndicateId] ?? 0) + 25;
-        }
-      }
-
+      const assault = resolveAssault(nextState, syndicateId, racket.id, action.prepTier);
       return {
         state: nextState,
         result: {
           executed: true,
-          success: seized,
-          outcome: resolution.outcome,
-          roll: resolution.roll,
-          casualtiesLost: resolution.casualties.totalLost,
+          success: assault.seized,
+          outcome: assault.outcome,
+          roll: assault.roll,
+          casualtiesLost: assault.casualtiesLost,
         },
       };
     }
@@ -510,8 +613,15 @@ export function applyAction(
         if (!target || target.isEliminated) {
           return { state: prevState, result: { executed: false, success: false, reason: 'Invalid target syndicate to frame' } };
         }
+        if (actor.framesThisWeek >= MAX_FRAMES_PER_WEEK) {
+          return {
+            state: prevState,
+            result: { executed: false, success: false, reason: `Frame limit reached (${MAX_FRAMES_PER_WEEK} per week)` },
+          };
+        }
+        actor.framesThisWeek += 1;
         target.heat = Math.min(100, target.heat + BRIBE_FRAME_HEAT);
-        target.grudge[syndicateId] = (target.grudge[syndicateId] ?? 0) + 10;
+        addGrudge(target, syndicateId, 10);
       }
 
       return { state: nextState, result: { executed: true, success: true } };
@@ -536,10 +646,54 @@ export function applyAction(
 }
 
 /**
+ * Start-of-week Siege tick (SPEC §2 step 1). Resolves, in declaration order, every siege due at or
+ * before `state.week`; cancels (no refund) sieges whose attacker is eliminated or already owns the
+ * racket. Consumes RNG only for sieges that resolve. MUTATES `state` (a fresh clone); returns events.
+ */
+function resolveDueSieges(state: GameState): string[] {
+  const events: string[] = [];
+  const remaining: Siege[] = [];
+  for (const siege of state.activeSieges) {
+    if (siege.resolveWeek > state.week) {
+      remaining.push(siege);
+      continue;
+    }
+    const attacker = state.syndicates[siege.attackerId];
+    const racket = state.rackets[siege.racketId];
+    if (!attacker || !racket) continue;
+    const prefix = `Start of week ${state.week}: ${attacker.name}'s siege on ${racket.name}`;
+    if (attacker.isEliminated) {
+      events.push(`${prefix} was called off (attacker eliminated).`);
+      continue;
+    }
+    if (racket.ownerId === attacker.id) {
+      events.push(`${prefix} was called off (already theirs).`);
+      continue;
+    }
+    const assault = resolveAssault(state, attacker.id, racket.id, siege.prepTier);
+    events.push(
+      `${prefix} ${assault.seized ? 'took the racket' : 'failed'} (${assault.outcome}, roll ${assault.roll}, lost ${assault.casualtiesLost} crew).`
+    );
+  }
+  state.activeSieges = remaining;
+  return events;
+}
+
+/**
+ * Pure start-of-week Siege tick: returns a new state with due sieges resolved or cancelled.
+ * advanceWeek() runs the same step after advancing the week counter.
+ */
+export function tickSieges(prevState: GameState): { state: GameState; events: string[] } {
+  const nextState = cloneGameState(prevState);
+  const events = resolveDueSieges(nextState);
+  return { state: nextState, events };
+}
+
+/**
  * Executes the deterministic Sunday Ledger Phase:
  * 1. Collect dirtyYield from owned rackets (+25% monopoly bonus, 50% damaged cut).
- * 2. Deduct Crew Payroll (overflow to CleanCash; forced liquidation if in debt).
- * 3. Passive Heat & Empire Tax (-5 base + racket heat + (rackets-3)*2 tax).
+ * 2. Deduct Crew Payroll + Turf Upkeep (overflow to CleanCash; forced liquidation if in debt).
+ * 3. Passive Heat & Empire Tax (-5 base + racket heat + (rackets-3)*5 tax); grudge cooling.
  * 4. High-Heat Hazard (>=70 heat: 25% chance of 20% dirty cash raid).
  * 5. RICO indictment (2 consecutive weeks at 100 heat).
  * 6. Wiped Out check (0 crew, 0 rackets, < $1,000 total cash).
@@ -568,11 +722,20 @@ export function advanceWeek(prevState: GameState): GameState {
     }
   }
 
-  // --- Step 2: Crew Payroll & Forced Liquidation ---
+  // --- Step 2: Crew Payroll + Turf Upkeep & Forced Liquidation ---
   for (const syndicate of Object.values(nextState.syndicates)) {
     if (syndicate.isEliminated) continue;
 
-    const payroll = calculateSyndicatePayroll(syndicate.crew);
+    // Crew Payroll and Turf Upkeep share one bill: Dirty first, then Clean, then forced liquidation.
+    const crewPayroll = calculateSyndicatePayroll(syndicate.crew);
+    const ownedForUpkeep = countOwnedRackets(syndicate.id, nextState.rackets);
+    const upkeep = turfUpkeep(ownedForUpkeep);
+    const payroll = crewPayroll + upkeep;
+    if (upkeep > 0) {
+      events.push(
+        `${syndicate.name} paid $${crewPayroll} Crew Payroll + $${upkeep} Turf Upkeep (${ownedForUpkeep} rackets).`
+      );
+    }
 
     if (syndicate.dirtyCash >= payroll) {
       syndicate.dirtyCash -= payroll;
@@ -618,6 +781,14 @@ export function advanceWeek(prevState: GameState): GameState {
     if (syndicate.isEliminated) continue;
 
     syndicate.heat = projectSundayHeat(syndicate.id, syndicate.heat, nextState.rackets);
+  }
+
+  // --- Step 3b: Grudge cooling (feuds fade unless renewed) ---
+  for (const syndicate of Object.values(nextState.syndicates)) {
+    if (syndicate.isEliminated) continue;
+    for (const [targetId, grudge] of Object.entries(syndicate.grudge)) {
+      syndicate.grudge[targetId] = decayGrudge(grudge);
+    }
   }
 
   // --- Step 4: High-Heat Hazard (Police Raid >= 70 Heat) ---
@@ -706,7 +877,7 @@ export function advanceWeek(prevState: GameState): GameState {
       nextState.isGameOver = true;
       nextState.winnerId = winner.id;
       nextState.winReason = 'DOMINATION';
-    } else if (nextState.week >= 52) {
+    } else if (nextState.week >= MAX_WEEKS) {
       // Condition C: Week 52 Kingpin Tiebreaker
       livingSyndicates.sort(
         (a, b) =>
@@ -736,6 +907,7 @@ export function advanceWeek(prevState: GameState): GameState {
 
     if (!s.isEliminated) {
       s.actionPoints = 3;
+      s.framesThisWeek = 0;
       for (const [targetId, turns] of Object.entries(s.wiretapTurnsRemaining)) {
         if (turns > 0) {
           s.wiretapTurnsRemaining[targetId] = turns - 1;
@@ -763,6 +935,9 @@ export function advanceWeek(prevState: GameState): GameState {
 
   if (!nextState.isGameOver) {
     nextState.week += 1;
+    // Start of the new week: tick 2-turn Siege Telegraphs. Their events are appended to the
+    // snapshot just recorded so "last week's events" shows them right after End Week.
+    snapshot.events.push(...resolveDueSieges(nextState));
   }
 
   return nextState;

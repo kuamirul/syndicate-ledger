@@ -120,6 +120,8 @@ export interface SyndicateState {
   eliminatedWeek?: number;
   grudge: Record<string, number>;
   wiretapTurnsRemaining: Record<string, number>;
+  /** BRIBE (Frame) actions taken this week; reset with AP (max MAX_FRAMES_PER_WEEK). */
+  framesThisWeek: number;
 }
 
 export interface SyndicateSnapshot {
@@ -140,12 +142,26 @@ export interface WeekSnapshot {
   events: string[];
 }
 
+/**
+ * A telegraphed 2-turn assault on a rival-owned racket (SPEC §2). Declared and paid for with a
+ * SEIZE in `telegraphedWeek`; resolved at the start of `resolveWeek` (= telegraphedWeek + 2).
+ */
+export interface Siege {
+  /** Deterministic id: `${telegraphedWeek}:${attackerId}:${racketId}`. */
+  id: string;
+  attackerId: string;
+  racketId: string;
+  prepTier: PrepTier;
+  telegraphedWeek: number;
+  resolveWeek: number;
+}
+
 export interface GameState {
   week: number;
   rngState: number;
   syndicates: Record<string, SyndicateState>;
   rackets: Record<string, RacketState>;
-  activeSieges: unknown[];
+  activeSieges: Siege[];
   history: WeekSnapshot[];
   decisionTraces: DecisionTrace[];
   winnerId: string | null;

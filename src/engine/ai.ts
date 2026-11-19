@@ -10,14 +10,32 @@ import {
 import {
   ACTION_POINTS_PER_WEEK,
   AI_CASH_RESERVE,
+  AI_FRAME_SELF_HEAT,
+  AI_FRAME_SELF_HEAT_PENALTY,
+  AI_FRAME_THREAT_GRUDGE,
+  AI_INCOMING_FRAME_HEAT_CAP,
+  AI_LEADER_REARM_BONUS,
+  AI_LONG_YIELD_WEEKS,
   AI_LOOKAHEAD_WEEKS,
+  AI_NEAR_DOMINATION_BONUS,
   AI_RICO_EMERGENCY,
+  AI_RICO_STRIKE_HEAT,
   AI_SAFE_HEAT,
+  AI_WEAK_ATTACK,
+  AI_ZERO_CREW_REARM_BONUS,
   ASSAULT_BASE_COST,
   BRIBE_CLEAN_COST,
   BRIBE_DIRTY_COST,
+  BRIBE_FRAME_HEAT,
+  EMPIRE_FREE_RACKETS,
+  EMPIRE_HEAT_PER_RACKET,
+  GRUDGE_MAX,
   LAUNDER_FEE_PCT,
   LAUNDER_MAX,
+  MAX_FRAMES_PER_WEEK,
+  MAX_OUTGOING_SIEGES,
+  MAX_WEEKS,
+  SIEGE_LEAD_WEEKS,
   WIRETAP_COST,
 } from './constants';
 import {
@@ -31,6 +49,7 @@ import {
   calculateSyndicateValuation,
   countOwnedRackets,
   projectSundayHeat,
+  turfUpkeep,
 } from './reducer';
 import type { ActionResult } from './reducer';
 import { calculateRiskProbabilities, PREP_CONFIG } from './risk';
@@ -71,8 +90,13 @@ export const SUSTAINABLE_JOB_HEAT = 5;
  * the clamped risk floors make the vault job "+EV" even at attack 3, and big jobs look lucrative
  * at high attack, but heat makes neither repeatable three times a week.
  */
+// Pure memo: bestJobEV depends only on `attack` and static job data, so caching cannot change
+// outcomes (deterministic, no game state involved).
+const BEST_JOB_EV_CACHE = new Map<number, number>();
 export function bestJobEV(attack: number): number {
   if (attack <= 0) return 0;
+  const cached = BEST_JOB_EV_CACHE.get(attack);
+  if (cached !== undefined) return cached;
   let best = 0;
   for (const job of STREET_JOBS) {
     for (const tier of PREP_TIERS) {
@@ -85,6 +109,7 @@ export function bestJobEV(attack: number): number {
       if (ev > best) best = ev;
     }
   }
+  BEST_JOB_EV_CACHE.set(attack, best);
   return best;
 }
 
@@ -171,9 +196,18 @@ export function generateCandidateActions(
   }
 
   // 2. SEIZE actions (Rival or Neutral rackets x affordable prep tiers)
+  // Mirrors applyAction's siege legality: max MAX_OUTGOING_SIEGES queued, one per racket, and
+  // it must resolve by week 52.
+  const besieging = new Set(
+    state.activeSieges.filter((s) => s.attackerId === actor.id).map((s) => s.racketId)
+  );
+  const canTelegraph =
+    besieging.size < MAX_OUTGOING_SIEGES && state.week + SIEGE_LEAD_WEEKS <= MAX_WEEKS;
   for (const racket of hasCrew ? Object.values(state.rackets) : []) {
     // Cannot attack own racket
     if (racket.ownerId === actor.id) continue;
+    // Rival-owned rackets are sieges: only while a new siege is legal.
+    if (racket.ownerId !== null && (!canTelegraph || besieging.has(racket.id))) continue;
 
     // Prep Tier 0
     if (actor.dirtyCash >= ASSAULT_BASE_COST + PREP_CONFIG[0].cost) {
@@ -224,9 +258,11 @@ export function generateCandidateActions(
     }
   }
 
-  // 5b. Frame living rivals (+12 heat)
-  for (const rival of Object.values(state.syndicates)) {
-    if (rival.id === actor.id || rival.isEliminated) continue;
+  // 5b. Frame living rivals (+12 heat): at most MAX_FRAMES_PER_WEEK per week (mirrors applyAction),
+  // and never a rival already at Heat 100 (no effect).
+  const canFrame = actor.framesThisWeek < MAX_FRAMES_PER_WEEK;
+  for (const rival of canFrame ? Object.values(state.syndicates) : []) {
+    if (rival.id === actor.id || rival.isEliminated || rival.heat >= 100) continue;
 
     if (actor.cleanCash >= BRIBE_CLEAN_COST) {
       actions.push({ type: 'BRIBE', useClean: true, targetSyndicateId: rival.id });
@@ -265,6 +301,12 @@ export interface ScoringContext {
   ownedInDistrict: Record<string, number>;
   districtSize: Record<string, number>;
   projectedSundayHeat: number;
+  /**
+   * Heat the actor may still be framed for before Sunday: +12 per living rival that can still
+   * frame this week (AP left, frame unused, own Heat < AI_FRAME_SELF_HEAT) and has a motive
+   * (actor leads the city, or the rival's grudge on the actor >= AI_FRAME_THREAT_GRUDGE). Capped.
+   */
+  expectedIncomingFrameHeat: number;
   /** Earning power at the actor's current attack (see bestJobEV). */
   currentBestJobEV: number;
   /** `${jobId}_${prepTier}` of the single best >=60%-win EXTORT the actor can afford, if any. */
@@ -275,7 +317,7 @@ export interface ScoringContext {
 export function buildScoringContext(state: GameState, syndicateId: string): ScoringContext {
   const actor = state.syndicates[syndicateId]!;
   const attack = calculateSyndicateAttack(actor.crew);
-  const payroll = calculateSyndicatePayroll(actor.crew);
+  let payroll = calculateSyndicatePayroll(actor.crew);
   const totalCash = actor.dirtyCash + actor.cleanCash;
 
   const ownedInDistrict: Record<string, number> = {};
@@ -289,11 +331,16 @@ export function buildScoringContext(state: GameState, syndicateId: string): Scor
     }
   }
 
+  // Turf Upkeep is paid with Crew Payroll on Sunday, so it is part of the bill the AI must cover.
+  payroll += turfUpkeep(ownedCount);
+
   // SPEC §5.1: the +65 goes to the single highest-EV EXTORT with >= 60% win chance, among jobs
-  // the actor could actually run (prep affordable and within the liquidity guard).
+  // the actor could actually run (prep affordable and within the liquidity guard). It is only
+  // used in a payroll emergency, so it is only computed then.
+  const projectedYield = calculateProjectedRacketYield(syndicateId, state.rackets);
   let bestEmergencyJobKey: string | null = null;
   let bestEmergencyEV = -Infinity;
-  if (attack > 0) {
+  if (attack > 0 && totalCash + projectedYield < payroll) {
     for (const job of STREET_JOBS) {
       for (const tier of PREP_TIERS) {
         const prepCost = PREP_CONFIG[tier].cost;
@@ -311,9 +358,23 @@ export function buildScoringContext(state: GameState, syndicateId: string): Scor
     }
   }
 
+  const leaderId = findCityLeader(state.rackets);
+  let expectedIncomingFrameHeat = 0;
+  for (const rival of Object.values(state.syndicates)) {
+    if (rival.id === syndicateId || rival.isEliminated) continue;
+    const canStillFrame =
+      rival.actionPoints >= 1 &&
+      rival.framesThisWeek < MAX_FRAMES_PER_WEEK &&
+      rival.heat < AI_FRAME_SELF_HEAT;
+    const hasMotive =
+      leaderId === syndicateId || (rival.grudge[syndicateId] ?? 0) >= AI_FRAME_THREAT_GRUDGE;
+    if (canStillFrame && hasMotive) expectedIncomingFrameHeat += BRIBE_FRAME_HEAT;
+  }
+  expectedIncomingFrameHeat = Math.min(expectedIncomingFrameHeat, AI_INCOMING_FRAME_HEAT_CAP);
+
   return {
-    leaderId: findCityLeader(state.rackets),
-    projectedYield: calculateProjectedRacketYield(syndicateId, state.rackets),
+    leaderId,
+    projectedYield,
     attack,
     payroll,
     totalCash,
@@ -321,6 +382,7 @@ export function buildScoringContext(state: GameState, syndicateId: string): Scor
     ownedInDistrict,
     districtSize,
     projectedSundayHeat: projectSundayHeat(syndicateId, actor.heat, state.rackets),
+    expectedIncomingFrameHeat,
     currentBestJobEV: bestJobEV(attack),
     bestEmergencyJobKey,
   };
@@ -357,8 +419,12 @@ export function scoreCandidateAction(
   const projectedSundayCash = c.totalCash + c.projectedYield;
   const isPayrollEmergency = projectedSundayCash < payroll;
   const isHeatEmergency = actor.heat >= 80;
-  // RICO strike projected for this Sunday if nothing is done about Heat.
-  const isRicoEmergency = c.projectedSundayHeat >= 100;
+  // RICO strike projected for this Sunday if nothing is done about Heat: either Heat (plus frames
+  // motivated rivals can still land this week) reaches 100, or one strike is already on the books
+  // and projected Heat is past AI_RICO_STRIKE_HEAT.
+  const isRicoEmergency =
+    c.projectedSundayHeat + c.expectedIncomingFrameHeat >= 100 ||
+    (actor.ricoCounter >= 1 && c.projectedSundayHeat >= AI_RICO_STRIKE_HEAT);
   const leaderId = c.leaderId;
 
   let evScore = 0;
@@ -425,10 +491,20 @@ export function scoreCandidateAction(
       const pMessy = probs.messy / 100;
       const pBotched = probs.botched / 100;
 
-      // Net EV: Expected dirty yield stream (~4 weeks value) minus assault and casualty cost
-      const expectedYieldValue = pSuccess * (racket.dirtyYield * 4);
+      // Net EV: expected yield over the horizon, minus assault, prep, casualties and the extra
+      // Turf Upkeep the racket would add. An upkeep-free racket (post-seize <= 3) is valued over
+      // min(8, remaining weeks); others over 4 weeks. A rival siege lands SIEGE_LEAD_WEEKS later.
+      const horizonWeeks =
+        c.ownedCount + 1 <= EMPIRE_FREE_RACKETS
+          ? Math.min(AI_LONG_YIELD_WEEKS, MAX_WEEKS - state.week + 1)
+          : 4;
+      const yieldWeeks = Math.max(0, horizonWeeks - (isRival ? SIEGE_LEAD_WEEKS : 0));
+      const expectedYieldValue = pSuccess * (racket.dirtyYield * yieldWeeks);
       const expectedCasualtyCost = pMessy * 800 + pBotched * 1600;
-      const netEV = expectedYieldValue - ASSAULT_BASE_COST - prepCost - expectedCasualtyCost;
+      const upkeepDelta = turfUpkeep(c.ownedCount + 1) - turfUpkeep(c.ownedCount);
+      const expectedUpkeepCost = pSuccess * upkeepDelta * yieldWeeks;
+      const netEV =
+        expectedYieldValue - ASSAULT_BASE_COST - prepCost - expectedCasualtyCost - expectedUpkeepCost;
       evScore = Math.round(netEV / 100);
 
       // Turf Score: territorial conquest and monopoly progress
@@ -449,9 +525,10 @@ export function scoreCandidateAction(
         turfScore += 15;
       }
 
-      // Near domination win: if actor currently owns >= 6 rackets
-      if (c.ownedCount >= 6) {
-        turfScore += 60;
+      // Near domination: a small push at >= 6 rackets, only for a SEIZE that pays for itself
+      // after Turf Upkeep (never a reason to buy an unaffordable empire).
+      if (c.ownedCount >= 6 && netEV >= 0) {
+        turfScore += AI_NEAR_DOMINATION_BONUS;
       }
 
       // Archetype specific turf bonuses:
@@ -470,7 +547,8 @@ export function scoreCandidateAction(
 
       // Heat Risk: Rackets generate passive heat + combat heat
       const expCombatHeat = (probs.clean * 1 + probs.messy * 2 + probs.botched * 3) / 100;
-      heatRiskScore = Math.round((expCombatHeat + racket.passiveHeat) * 3);
+      const empireHeatDelta = c.ownedCount + 1 > EMPIRE_FREE_RACKETS ? EMPIRE_HEAT_PER_RACKET : 0;
+      heatRiskScore = Math.round((expCombatHeat + racket.passiveHeat + empireHeatDelta) * 3);
       if (actor.heat >= 70) {
         heatRiskScore += 25;
       }
@@ -480,7 +558,7 @@ export function scoreCandidateAction(
 
       // Grudge Score: Revenge against rivals who attacked us
       if (isRival && racket.ownerId) {
-        const grudge = actor.grudge[racket.ownerId] ?? 0;
+        const grudge = Math.min(actor.grudge[racket.ownerId] ?? 0, GRUDGE_MAX);
         grudgeScore = Math.round(grudge * 0.6);
       }
 
@@ -489,7 +567,8 @@ export function scoreCandidateAction(
         coalitionBonus = 40;
       }
 
-      reasoning = `Seizing ${racket.name} in ${racket.district} (Win ${probs.clean + probs.messy}%, Turf +${turfScore}${coalitionBonus ? ', Coalition +40' : ''})`;
+      const siegeNote = isRival ? `, telegraphs siege resolving wk ${state.week + SIEGE_LEAD_WEEKS}` : '';
+      reasoning = `Seizing ${racket.name} in ${racket.district} (Win ${probs.clean + probs.messy}%, Turf +${turfScore}${coalitionBonus ? ', Coalition +40' : ''}${siegeNote})`;
       break;
     }
 
@@ -522,6 +601,16 @@ export function scoreCandidateAction(
         reasoning = `Survival clamp: Cannot recruit ${action.count}x ${tierDef.name} due to Sunday payroll deficit`;
       } else {
         reasoning = `Recruiting ${action.count}x ${tierDef.name} for combat strength (Power +${combatPower}, ${AI_LOOKAHEAD_WEEKS}-wk net EV $${Math.round(netEV)})`;
+        // Rearm: a weak syndicate facing a >= 5-racket leader gets the spec's anti-leader +40;
+        // a crewless one gets a survival bonus. The liquidity guard still blocks unaffordable hires.
+        if (leaderId && leaderId !== actor.id && actorAttack < AI_WEAK_ATTACK) {
+          coalitionBonus = AI_LEADER_REARM_BONUS;
+          reasoning += `, rearming against leader +${AI_LEADER_REARM_BONUS}`;
+        }
+        if (actorAttack === 0) {
+          emergencyModifiers += AI_ZERO_CREW_REARM_BONUS;
+          reasoning += `, zero-crew rearm +${AI_ZERO_CREW_REARM_BONUS}`;
+        }
       }
       break;
     }
@@ -537,8 +626,8 @@ export function scoreCandidateAction(
         evScore += Math.round((action.amount * 0.2) / 100);
       }
 
-      // Bankers prioritize laundering
-      if (actor.archetypeId === 'banker') {
+      // Bankers prioritize laundering — once they own an income engine (>= 3 rackets).
+      if (actor.archetypeId === 'banker' && c.ownedCount >= EMPIRE_FREE_RACKETS) {
         evScore += 20;
       }
 
@@ -559,7 +648,7 @@ export function scoreCandidateAction(
         // for this Sunday makes the bribe outrank everything (AI_RICO_EMERGENCY).
         if (isRicoEmergency) {
           emergencyModifiers = AI_RICO_EMERGENCY;
-          reasoning = `RICO emergency: Heat ${actor.heat}% projected to hit 100 this Sunday (+${AI_RICO_EMERGENCY} Emergency)`;
+          reasoning = `RICO emergency: Heat ${actor.heat}% projected ${c.projectedSundayHeat}% Sunday (+${c.expectedIncomingFrameHeat} possible frames, RICO strikes ${actor.ricoCounter}) (+${AI_RICO_EMERGENCY} Emergency)`;
         } else if (isHeatEmergency) {
           emergencyModifiers = 75;
           reasoning = `Emergency Heat reduction: Heat at ${actor.heat}% poses immediate RICO indictment danger (+75 Emergency)`;
@@ -578,7 +667,7 @@ export function scoreCandidateAction(
           }
 
           // Grudge revenge
-          const grudge = actor.grudge[targetRival.id] ?? 0;
+          const grudge = Math.min(actor.grudge[targetRival.id] ?? 0, GRUDGE_MAX);
           grudgeScore = Math.round(grudge * 0.8);
 
           // Anti-Leader Coalition: +40 bonus for framing leader
@@ -592,6 +681,16 @@ export function scoreCandidateAction(
           }
 
           reasoning = `Framing rival ${targetRival.name} with +12 Heat (Target Heat: ${targetRival.heat}%${coalitionBonus ? ', Coalition +40' : ''})`;
+
+          // Anti-suicide frame guard: a frame on a rival already at 100 does nothing, and a
+          // framer running hot should spend its AP on self-preservation, not a mutual RICO race.
+          if (targetRival.heat >= 100) {
+            emergencyModifiers = -999;
+            reasoning = `Frame skipped: ${targetRival.name} is already at Heat 100`;
+          } else if (actor.heat >= AI_FRAME_SELF_HEAT) {
+            emergencyModifiers = -AI_FRAME_SELF_HEAT_PENALTY;
+            reasoning = `Frame suppressed: own Heat ${actor.heat}% >= ${AI_FRAME_SELF_HEAT} (-${AI_FRAME_SELF_HEAT_PENALTY}); ${reasoning}`;
+          }
         }
       }
       break;
@@ -623,8 +722,13 @@ export function scoreCandidateAction(
   // keep payroll covered.
   const cost = upfrontCost(action);
   if (cost > 0 && emergencyModifiers > -900) {
+    // A SEIZE must also cover the Turf Upkeep it would add (yield is not counted, see above).
     const addedPayroll =
-      action.type === 'RECRUIT' ? action.count * CREW_BY_ID[action.tier].weeklyPayroll : 0;
+      action.type === 'RECRUIT'
+        ? action.count * CREW_BY_ID[action.tier].weeklyPayroll
+        : action.type === 'SEIZE'
+          ? turfUpkeep(c.ownedCount + 1) - turfUpkeep(c.ownedCount)
+          : 0;
     const isSelfBribeEmergency =
       action.type === 'BRIBE' && !action.targetSyndicateId && (isHeatEmergency || isRicoEmergency);
     const floor = payroll + addedPayroll + (isSelfBribeEmergency ? 0 : AI_CASH_RESERVE);

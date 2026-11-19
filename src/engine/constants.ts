@@ -26,3 +26,59 @@ export const AI_RICO_EMERGENCY = 999;
 export const AI_LOOKAHEAD_WEEKS = 4;
 /** Action Points per week (SPEC §1). */
 export const ACTION_POINTS_PER_WEEK = 3;
+
+// --- 2-turn Siege telegraph (W3-T8b). Game rule: applies to every syndicate via applyAction().
+
+/** Weeks between declaring a siege (SEIZE on a rival-owned racket) and its resolution. */
+export const SIEGE_LEAD_WEEKS = 2;
+/** Last week of a run (SPEC §1); a siege must resolve on or before it. */
+export const MAX_WEEKS = 52;
+/** Max active outgoing sieges per syndicate (game rule, same for player and AI); still max 1 per racket. */
+export const MAX_OUTGOING_SIEGES = 2;
+/** Max BRIBE (Frame) actions per syndicate per week (game rule; self-BRIBE is not limited). */
+export const MAX_FRAMES_PER_WEEK = 1;
+
+// --- Grudge (W3-T8b). Game rule: stored grudge is clamped and cools every Sunday.
+
+/** Stored grudge per (holder, target) is clamped to 0..GRUDGE_MAX. */
+export const GRUDGE_MAX = 100;
+/** Sunday Ledger cooling: grudge = floor(grudge * (100 - GRUDGE_DECAY_PCT) / 100). */
+export const GRUDGE_DECAY_PCT = 10;
+
+// --- AI frame guard (W3-T8b). Scoring only.
+
+/** At or above this own Heat, an AI frame gets AI_FRAME_SELF_HEAT_PENALTY. */
+export const AI_FRAME_SELF_HEAT = 75;
+/** Utility removed from BRIBE (Frame) while the framer's own Heat >= AI_FRAME_SELF_HEAT. */
+export const AI_FRAME_SELF_HEAT_PENALTY = 200;
+
+// --- AI frame-aware RICO margin (W3-T8b). Scoring only.
+
+/** With ricoCounter >= 1 (one strike already), bribe once projected Sunday Heat reaches this. */
+export const AI_RICO_STRIKE_HEAT = 65;
+/** A rival counts as a frame threat if its grudge on us is at least this (or we lead the city). */
+export const AI_FRAME_THREAT_GRUDGE = 35;
+/** Cap on expected incoming frame Heat (2 frames x +12). */
+export const AI_INCOMING_FRAME_HEAT_CAP = 24;
+
+// --- Progressive Empire Overhead (W3-T8b). Game rule: applies to every syndicate on Sunday.
+
+/** Rackets a syndicate may own before Empire Heat and Turf Upkeep start. */
+export const EMPIRE_FREE_RACKETS = 3;
+/** Sunday Empire Heat per owned racket above EMPIRE_FREE_RACKETS (was 2 in v0.1). */
+export const EMPIRE_HEAT_PER_RACKET = 5;
+/** Sunday Turf Upkeep = TURF_UPKEEP_BASE * max(0, owned - EMPIRE_FREE_RACKETS)^2. */
+export const TURF_UPKEEP_BASE = 600;
+
+// --- AI tuning added in W3-T8b. Scoring only.
+
+/** Attack of the starting crew (4 thugs); below it a syndicate counts as "weak". */
+export const AI_WEAK_ATTACK = 12;
+/** RECRUIT bonus for a weak syndicate while a >= 5-racket city leader exists (SPEC §5.1's +40). */
+export const AI_LEADER_REARM_BONUS = 40;
+/** RECRUIT survival bonus for a syndicate with 0 crew. */
+export const AI_ZERO_CREW_REARM_BONUS = 25;
+/** Yield horizon cap for a racket that adds no Turf Upkeep (post-seize <= EMPIRE_FREE_RACKETS). */
+export const AI_LONG_YIELD_WEEKS = 8;
+/** SEIZE turf bonus at >= 6 rackets, only when the SEIZE's net EV (after upkeep) is >= 0. */
+export const AI_NEAR_DOMINATION_BONUS = 20;

@@ -112,8 +112,8 @@ describe('Static Game Data & Zod Validation', () => {
       expect(warlord).toBeDefined();
       expect(warlord?.weights).toEqual({
         greed: 0.9,
-        aggression: 1.8,
-        caution: 0.6,
+        aggression: 1.4,
+        caution: 1.0,
         revenge: 1.5,
       });
 

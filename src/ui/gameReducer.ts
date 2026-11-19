@@ -33,6 +33,13 @@ export function gameReducer(state: UiState, ua: UiAction): UiState {
       if (!result.executed) {
         return { ...state, message: `Rejected: ${result.reason ?? 'unknown reason'}` };
       }
+      if (result.queued) {
+        return {
+          ...state,
+          game,
+          message: `${ua.action.type} queued as siege — resolves at the start of week ${result.resolveWeek ?? '?'}`,
+        };
+      }
       const bits = [result.outcome, result.roll !== undefined ? `roll ${result.roll}` : undefined]
         .filter(Boolean)
         .join(', ');

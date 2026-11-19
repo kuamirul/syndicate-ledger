@@ -8,21 +8,34 @@
   2. **Week 52 Kingpin Tiebreaker:** Survive end of Week 52 with the highest **Syndicate Valuation** = `(CleanCash * 2) + DirtyCash + Sum(OwnedRacketBaseValue)` among non-eliminated syndicates.
 - **Lose / Elimination Conditions (Applies Equally to Player & AI):**
   1. **RICO Indictment:** End **2 consecutive weeks** at `Heat === 100`.
-  2. **Insolvency / Mutiny:** `DirtyCash + CleanCash < 0` after Sunday Payroll AND `OwnedRackets === 0` (if rackets > 0, forcibly liquidate lowest-value racket at 50% value to cover debt).
+  2. **Insolvency / Mutiny:** `DirtyCash + CleanCash < 0` after Sunday Payroll + Turf Upkeep AND `OwnedRackets === 0` (if rackets > 0, forcibly liquidate lowest-value racket at 50% value to cover debt).
   3. **Wiped Out:** `CrewCount === 0`, `OwnedRackets === 0`, and total cash `< $1,000` (cannot afford Crew or Street Jobs).
 
 ---
 
 ## 2. Deterministic Weekly Turn Order
-1. **Start of Week:** Roll weekly City Event modifier (every 4 weeks); tick active 2-turn Siege Telegraphs; reset each living syndicate to `3 AP`.
-2. **Player Action Phase:** Player spends up to `3 AP` (actions resolve immediately as clicked, or queued if 2-turn Siege).
+1. **Start of Week:** Roll weekly City Event modifier (every 4 weeks); tick active 2-turn Siege Telegraphs (resolve every siege whose resolve week has arrived, in declaration order — see §2.1); reset each living syndicate to `3 AP` and `0` Frames used.
+2. **Player Action Phase:** Player spends up to `3 AP` (actions resolve immediately as clicked, or queued if 2-turn Siege: any `SEIZE` on a rival-owned racket).
 3. **AI Action Phase:** Remaining living AI syndicates act in descending order of current Valuation, scoring and executing `1 AP` at a time via `applyAction()` until `0 AP` or pass.
 4. **Sunday Ledger Phase (`advanceWeek`):**
    - Add `dirtyYield` from all owned rackets (+25% integer bonus if syndicate owns all 3 rackets in that District).
-   - Deduct Crew Payroll (`CrewTotalCost`) from `DirtyCash` first, overflow from `CleanCash`. Handle forced racket liquidation if `< $0`.
-   - Apply passive Heat changes: `-5` base decay + `max(0, (OwnedRackets - 3) * 2)` Empire Heat tax.
+   - Deduct Crew Payroll (`CrewTotalCost`) + Turf Upkeep (§2.2) from `DirtyCash` first, overflow from `CleanCash`. Handle forced racket liquidation if `< $0`. Turf Upkeep is logged as its own ledger line.
+   - Apply passive Heat changes: `-5` base decay + owned racket passive Heat + `max(0, (OwnedRackets - 3) * 5)` Empire Heat tax (§2.2).
+   - Cool every Grudge: `grudge = floor(grudge * 0.90)` (§2.1).
    - Resolve High-Heat Hazard: if `Heat >= 70`, roll `25%` chance of Police Raid seizing `20%` of `DirtyCash` (`CleanCash` is immune).
    - Increment `ricoCounter` if `Heat === 100` (else reset `ricoCounter = 0`); check Win/Elimination flags; append immutable `WeekSnapshot` to history; advance `week += 1`.
+
+### 2.1 Siege Telegraph, Action Caps & Grudge (W3-T8b — applies equally to Player & AI)
+- **2-turn Siege:** a `SEIZE` on a racket owned by another syndicate is queued, not rolled. Assault cost + Prep and `1 AP` are paid when declared in week `W`; it resolves at the **start of week `W + 2`** (`SIEGE_LEAD_WEEKS = 2`), giving the defender one full action phase to react. The roll uses the attacker's crew at resolve time against the racket's defense at resolve time, through the same assault rules as an instant `SEIZE` (RNG is consumed only at resolve). A `SEIZE` on a neutral racket still resolves instantly.
+- **Siege limits:** max `2` active outgoing sieges per syndicate (`MAX_OUTGOING_SIEGES`) and `1` per racket per attacker; a siege must resolve by week 52.
+- **Cancellation (no refund):** the siege is called off at resolve if the attacker is eliminated or already owns the racket. If the defender lost the racket meanwhile, it resolves against the racket as it stands.
+- **Frame cap:** max `1` `BRIBE (Frame)` per syndicate per week (`MAX_FRAMES_PER_WEEK`); self-`BRIBE` is limited only by AP and cash.
+- **Grudge:** stored Grudge is clamped to `0..100` on every increment, and cools every Sunday by `floor(grudge * 0.90)` (`GRUDGE_DECAY_PCT = 10`), so feuds fade unless renewed.
+
+### 2.2 Progressive Empire Overhead (W3-T8b — applies equally to Player & AI)
+- **Empire Heat:** `max(0, (OwnedRackets - 3) * 5)` per Sunday (was `* 2` in v0.1).
+- **Turf Upkeep:** `600 * max(0, OwnedRackets - 3)^2` per Sunday, paid together with Crew Payroll through the same Dirty -> Clean -> forced-liquidation pipeline: 4 rackets `$600`, 5 `$2,400`, 6 `$5,400`, 7 `$9,600`, 8 `$15,000`.
+- Three rackets stay overhead-free, so a small income engine is cheap while a sprawling empire must keep paying to hold its turf.
 
 ---
 
@@ -34,10 +47,10 @@
 
 ### 3.2 Player & AI Verbs (1 AP Each)
 1. **`EXTORT` (Street Job):** Pick 1 of 6 jobs; optional Prep spend; resolve 3-Tier Risk Roll for instant `DirtyCash`.
-2. **`SEIZE` (Claim/Attack Racket):** Target neutral or rival racket (`+$1,500` base assault cost + optional Prep). Neutral uses Racket `baseDefense`; Rival uses `RacketBaseDefense + AssignedGuardDefense`. Win transfers ownership and inflicts casualties on Messy/Botched.
+2. **`SEIZE` (Claim/Attack Racket):** Target neutral or rival racket (`+$1,500` base assault cost + optional Prep). Neutral uses Racket `baseDefense` and resolves instantly; Rival uses `RacketBaseDefense + AssignedGuardDefense` and is queued as a 2-turn Siege (§2.1). Win transfers ownership and inflicts casualties on Messy/Botched.
 3. **`RECRUIT` (Hire Crew / Draft Lieutenant):** Hire up to 3 Crew units in one action OR draft 1 available Lieutenant from the shared city pool.
 4. **`LAUNDER` (Dirty -> Clean):** Convert up to `$10,000 DirtyCash` into `CleanCash` at a `25%` fee (`$7,500 Clean`), `+0 Heat`.
-5. **`BRIBE` (Cut Heat / Frame Rival):** Spend `$3,000 CleanCash` (or `$4,500 DirtyCash`) for `-22 Heat` on self OR `+12 Heat` on a target rival.
+5. **`BRIBE` (Cut Heat / Frame Rival):** Spend `$3,000 CleanCash` (or `$4,500 DirtyCash`) for `-22 Heat` on self OR `+12 Heat` on a target rival (max `1` Frame per week, §2.1).
 6. **`WIRETAP / DIPLOMACY`:** Spend `$1,000` to reveal target rival's exact wallet + top-3 next-turn Utility AI intents for 3 weeks, OR propose Truce / Joint Siege (Milestone 3).
 
 ### 3.3 Crew Tiers & Shared Lieutenants
@@ -89,8 +102,8 @@ Let `R = AttackerAttack / max(1, TargetDefense)`:
   - `P_Messy = 100 - P_Clean - P_Botched`
 - **Outcome Consequences:**
   - `CLEAN`: Full reward/seizure, `0` Crew lost, Clean Heat delta.
-  - `MESSY`: Messy reward (or racket seized damaged at 50% yield for 1 wk), lose `1` lowest-tier Crew unit, Messy Heat delta, `+15` Target Grudge.
-  - `BOTCHED`: `$0` reward / seizure fails, lose `2` Crew units, Botched Heat delta, `+25` Target Grudge.
+  - `MESSY`: Messy reward (or racket seized damaged at 50% yield for 1 wk), lose `1` lowest-tier Crew unit, Messy Heat delta, `+15` Target Grudge (clamped to `100`).
+  - `BOTCHED`: `$0` reward / seizure fails, lose `2` Crew units, Botched Heat delta, `+25` Target Grudge (clamped to `100`).
 
 ---
 
@@ -109,7 +122,7 @@ Every AI action generates a logged `DecisionTrace` using:
 ### 5.2 AI Archetype Weight Vectors (`0.5` to `2.0`)
 | Archetype | `greed` | `aggression` | `caution` | `revenge` | Signature Behavior |
 |---|---|---|---|---|---|
-| **The Warlord** | `0.9` | `1.8` | `0.6` | `1.5` | Heavy Crew recruitment; rushes rival turf early. |
+| **The Warlord** | `0.9` | `1.4` | `1.0` | `1.5` | Heavy Crew recruitment; rushes rival turf early. (W3-T8b balance: was `1.8 / 0.6`; still the highest aggression and lowest caution.) |
 | **The Banker** | `1.8` | `0.7` | `1.6` | `0.6` | Maximizes CleanCash laundering & Uptown/Week-52 valuation. |
 | **The Rat** | `1.1` | `1.0` | `1.5` | `1.4` | Spams Bribe/Frame to push rivals into `100%` RICO indictment. |
 | **The Opportunist** | `1.4` | `1.3` | `1.1` | `0.8` | Strikes weakened rivals right after they suffer Botched rolls. |
@@ -137,6 +150,11 @@ Every AI action generates a logged `DecisionTrace` using:
 - **`W2-T6` (3h):** Build `/scripts/sim.ts` CLI runner (`npm run sim`) printing archetype win rates, avg game length, and elimination reasons across 1,000 games in `< 2s`.
 - **`W2-T7` (3h):** Build unstyled HTML Greybox UI in `/src/ui/GreyboxApp.tsx` (Player dashboard, Rackets table, live Roll `%` preview, End Week, raw AI DecisionTrace viewer).
 - **`W3-T8` (10h):** Prototype balance pass + 2-turn AI Siege telegraph state (`M1 Exit Gate`: `< 5%` AI insolvency rate, all archetypes `12%–32%` win rate in 4-way sims).
+  - **M1 Exit Gate as measured (`npm run sim`, 1,000 games per seed block, seeds `1`, `5001`, `20001`, `9999`):**
+    - Insolvency `< 5.0%` of all syndicate seats; RICO eliminations low.
+    - Every archetype's win rate within `12.0%–32.0%` on the 4-seed aggregate (`n = 3,200` appearances), and `<= 33.0%` on any single seed block (`n = 800`, `1σ ≈ 1.6%` sampling noise around the `25%` baseline).
+    - Domination share `8.0%–80.0%` of games; average game length `28–52` weeks.
+    - Sim speed: `<= 12.0 s` per 1,000 games and `<= 0.25 ms` per game-week.
 
 ### Milestones 2–5 Summary (Weeks 4–18 | 145h)
 - **M2 Vertical Slice (`W4–W6`, 30h):** `shadcn/ui` 4-tab dark `Zinc` layout, Wiretap Inspector drawer, Prep odds modal.

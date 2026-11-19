@@ -10,15 +10,19 @@ import {
   calculateProjectedRacketYield,
   calculateSyndicateValuation,
   countOwnedRackets,
+  turfUpkeep,
 } from '../engine/reducer';
 import type { Action, CrewTierId, GameState, PrepTier } from '../engine/types';
 import { DEFAULT_SEED, gameReducer, initUiState } from './gameReducer';
 import {
   buildRacketRows,
+  buildSiegeRows,
+  buildSundayBill,
   buildTraceRows,
   formatPreview,
   PLAYER_ID,
   rollPreview,
+  seizeResolveWeek,
   unlockedCrewTiers,
 } from './viewModel';
 
@@ -36,11 +40,63 @@ function PrepSelect({ value, onChange }: { value: PrepTier; onChange: (v: PrepTi
   );
 }
 
+function ActiveSieges({ game, showAll }: { game: GameState; showAll: boolean }) {
+  const rows = buildSiegeRows(game, PLAYER_ID, showAll);
+  return (
+    <>
+      <p>
+        Sieges against your turf and your own sieges are always shown; rival-vs-rival sieges only while you
+        wiretap one side{showAll ? ' (DEV: showing all)' : ''}. Odds are as of now; they are rolled when the siege
+        resolves.
+      </p>
+      {rows.length === 0 ? (
+        <p>No visible sieges.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Attacker</th>
+              <th>Racket</th>
+              <th>Owner</th>
+              <th>Prep</th>
+              <th>Declared</th>
+              <th>Resolves (start of week)</th>
+              <th>Attacker odds now</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id}>
+                <td>{r.direction === 'incoming' ? 'INCOMING' : r.direction === 'outgoing' ? 'Yours' : 'Rival'}</td>
+                <td>{r.attackerName}</td>
+                <td>{r.racketName}</td>
+                <td>{r.ownerName}</td>
+                <td>{r.prepTier}</td>
+                <td>{r.telegraphedWeek}</td>
+                <td>{r.resolveWeek}</td>
+                <td>{r.odds}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
+  );
+}
+
 function Dashboard({ game }: { game: GameState }) {
   const rows = Object.values(game.syndicates);
+  const bill = buildSundayBill(game, PLAYER_ID);
   return (
     <section>
       <h2>Dashboard — Week {game.week}</h2>
+      {bill && (
+        <p>
+          Your Sunday bill: Crew Payroll ${bill.crewPayroll} + Turf Upkeep ${bill.turfUpkeep} ({bill.ownedRackets}{' '}
+          rackets; upkeep starts above 3) = ${bill.total}. Projected racket yield ${bill.projectedYield}.
+        </p>
+      )}
       <table>
         <thead>
           <tr>
@@ -51,6 +107,7 @@ function Dashboard({ game }: { game: GameState }) {
             <th>AP</th>
             <th>Crew (T/E/H)</th>
             <th>Payroll</th>
+            <th>Turf upkeep</th>
             <th>Yield/wk</th>
             <th>Rackets</th>
             <th>Valuation</th>
@@ -72,6 +129,7 @@ function Dashboard({ game }: { game: GameState }) {
                 {calculateTotalCrewCount(s.crew)} ({s.crew.thug}/{s.crew.enforcer}/{s.crew.hitman})
               </td>
               <td>{calculateSyndicatePayroll(s.crew)}</td>
+              <td>{turfUpkeep(countOwnedRackets(s.id, game.rackets))}</td>
               <td>{calculateProjectedRacketYield(s.id, game.rackets)}</td>
               <td>{countOwnedRackets(s.id, game.rackets)}</td>
               <td>{calculateSyndicateValuation(s, game.rackets)}</td>
@@ -97,6 +155,7 @@ export function GreyboxApp() {
   const [launder, setLaunder] = useState(1000);
   const [targetId, setTargetId] = useState('');
   const [seedInput, setSeedInput] = useState(String(DEFAULT_SEED));
+  const [devShowAllSieges, setDevShowAllSieges] = useState(false);
 
   const rivals = Object.values(game.syndicates).filter((s) => s.id !== PLAYER_ID && !s.isEliminated);
   const target = rivals.some((r) => r.id === targetId) ? targetId : (rivals[0]?.id ?? '');
@@ -225,6 +284,10 @@ export function GreyboxApp() {
           <tbody>
             {buildRacketRows(game).map((r) => {
               const seize: Action = { type: 'SEIZE', racketId: r.id, prepTier: seizePrep };
+              const isSiege = r.ownerId !== null && r.ownerId !== PLAYER_ID;
+              const alreadyBesieging = game.activeSieges.some(
+                (sg) => sg.attackerId === PLAYER_ID && sg.racketId === r.id
+              );
               return (
                 <tr key={r.id}>
                   <td>{r.name}</td>
@@ -240,10 +303,14 @@ export function GreyboxApp() {
                   <td>
                     <button
                       type="button"
-                      disabled={over || r.ownerId === PLAYER_ID}
+                      disabled={over || r.ownerId === PLAYER_ID || alreadyBesieging}
                       onClick={() => act(seize)}
                     >
-                      Seize ($1,500 + prep)
+                      {isSiege
+                        ? alreadyBesieging
+                          ? 'Siege underway'
+                          : `Declare siege ($1,500 + prep, resolves wk ${seizeResolveWeek(game, r.id)})`
+                        : 'Seize ($1,500 + prep)'}
                     </button>
                   </td>
                 </tr>
@@ -251,6 +318,19 @@ export function GreyboxApp() {
             })}
           </tbody>
         </table>
+      </section>
+
+      <section>
+        <h2>[Active Sieges]</h2>
+        <label>
+          <input
+            type="checkbox"
+            checked={devShowAllSieges}
+            onChange={(e) => setDevShowAllSieges(e.target.checked)}
+          />{' '}
+          [DEV] show all sieges
+        </label>
+        <ActiveSieges game={game} showAll={devShowAllSieges} />
       </section>
 
       <section>
