@@ -3,7 +3,15 @@ import { calculateSyndicateAttack } from '../engine/crew';
 import { createInitialGameState } from '../engine/reducer';
 import { calculateRiskProbabilities } from '../engine/risk';
 import type { DecisionTrace, GameState } from '../engine/types';
-import { buildRacketRows, buildTraceRows, rollPreview } from './viewModel';
+import { applyAction } from '../engine/reducer';
+import {
+  buildRacketRows,
+  buildSiegeRows,
+  buildSundayBill,
+  buildTraceRows,
+  rollPreview,
+  seizeResolveWeek,
+} from './viewModel';
 import { JOBS_BY_ID, STREET_JOBS } from '../data';
 
 describe('rollPreview', () => {
@@ -72,5 +80,50 @@ describe('buildTraceRows', () => {
     const rows = buildTraceRows([mk(1), mk(2), mk(3)], 2);
     expect(rows.map((r) => r.week)).toEqual([3, 2]);
     expect(rows[0]!.action).toBe('PASS');
+  });
+});
+
+describe('W3-T8b — Active Sieges view', () => {
+  /** ai_1 owns fish_market, the player owns dive_bar, ai_2 owns scrap_yard; three sieges queued. */
+  function siegeState(): GameState {
+    let state = createInitialGameState(4);
+    state.rackets.fish_market!.ownerId = 'ai_1';
+    state.rackets.dive_bar!.ownerId = 'player';
+    state.rackets.scrap_yard!.ownerId = 'ai_2';
+    state = applyAction(state, 'player', { type: 'SEIZE', racketId: 'fish_market', prepTier: 0 }).state; // outgoing
+    state = applyAction(state, 'ai_1', { type: 'SEIZE', racketId: 'dive_bar', prepTier: 1 }).state; // incoming
+    state = applyAction(state, 'ai_3', { type: 'SEIZE', racketId: 'scrap_yard', prepTier: 2 }).state; // rival vs rival
+    return state;
+  }
+
+  it('always shows incoming and own sieges; hides rival-vs-rival without a wiretap', () => {
+    const rows = buildSiegeRows(siegeState(), 'player');
+    expect(rows.map((r) => r.direction).sort()).toEqual(['incoming', 'outgoing']);
+    const incoming = rows.find((r) => r.direction === 'incoming')!;
+    expect(incoming).toMatchObject({ attackerName: 'The Iron Syndicate', racketName: 'Dive Bar', resolveWeek: 3, prepTier: 1 });
+    expect(incoming.odds).toMatch(/^Clean \d+% \/ Messy \d+% \/ Botched \d+%$/);
+  });
+
+  it('shows rival-vs-rival sieges while wiretapping the attacker or the defender, or in DEV mode', () => {
+    const state = siegeState();
+    expect(buildSiegeRows(state, 'player', true)).toHaveLength(3);
+    for (const tapped of ['ai_3', 'ai_2']) {
+      const s = { ...state, syndicates: { ...state.syndicates, player: { ...state.syndicates.player!, wiretapTurnsRemaining: { [tapped]: 2 } } } };
+      expect(buildSiegeRows(s, 'player').some((r) => r.direction === 'rival')).toBe(true);
+    }
+  });
+
+  it('Sunday bill lists Crew Payroll and Turf Upkeep separately', () => {
+    const state = createInitialGameState(1);
+    for (const id of ['fish_market', 'union_pier', 'bonded_warehouse', 'dive_bar', 'velvet_club']) state.rackets[id]!.ownerId = 'player';
+    expect(buildSundayBill(state, 'player')).toMatchObject({ crewPayroll: 1000, turfUpkeep: 2400, ownedRackets: 5, total: 3400 });
+    expect(buildSundayBill(state, 'ghost')).toBeNull();
+  });
+
+  it('seizeResolveWeek: neutral resolves now, rival-owned at week + 2', () => {
+    const state = createInitialGameState(1);
+    state.rackets.fish_market!.ownerId = 'ai_1';
+    expect(seizeResolveWeek(state, 'union_pier')).toBe(1);
+    expect(seizeResolveWeek(state, 'fish_market')).toBe(3);
   });
 });

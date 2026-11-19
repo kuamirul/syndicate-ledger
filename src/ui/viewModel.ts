@@ -1,9 +1,15 @@
 // Pure view-model helpers for the greybox UI (no React, no DOM).
 
 import { CREW_TIERS, JOBS_BY_ID } from '../data';
-import { calculateSyndicateAttack } from '../engine/crew';
+import { SIEGE_LEAD_WEEKS } from '../engine/constants';
+import { calculateSyndicateAttack, calculateSyndicatePayroll } from '../engine/crew';
 import { calculateRiskProbabilities } from '../engine/risk';
-import { hasDistrictMonopoly } from '../engine/reducer';
+import {
+  calculateProjectedRacketYield,
+  countOwnedRackets,
+  hasDistrictMonopoly,
+  turfUpkeep,
+} from '../engine/reducer';
 import type {
   Action,
   DecisionTrace,
@@ -125,4 +131,86 @@ export function buildTraceRows(traces: readonly DecisionTrace[], limit = 60): Tr
 
 export function unlockedCrewTiers(ownedRackets: number) {
   return CREW_TIERS.filter((t) => ownedRackets >= t.requiredRackets);
+}
+
+export type SiegeDirection = 'incoming' | 'outgoing' | 'rival';
+
+export interface SiegeRow {
+  id: string;
+  direction: SiegeDirection;
+  attackerName: string;
+  racketName: string;
+  ownerName: string;
+  prepTier: number;
+  telegraphedWeek: number;
+  resolveWeek: number;
+  /** Attacker's odds against the racket as things stand now (they are rolled at resolve). */
+  odds: string;
+}
+
+/**
+ * Active sieges visible to `viewerId`: sieges against the viewer's turf and the viewer's own
+ * sieges always; rival-vs-rival sieges only while the viewer wiretaps the attacker or the
+ * defender, or when `showAll` (DEV) is on.
+ */
+export function buildSiegeRows(state: GameState, viewerId: string, showAll = false): SiegeRow[] {
+  const viewer = state.syndicates[viewerId];
+  const rows: SiegeRow[] = [];
+  for (const siege of state.activeSieges) {
+    const racket = state.rackets[siege.racketId];
+    const attacker = state.syndicates[siege.attackerId];
+    if (!racket || !attacker) continue;
+    const ownerId = racket.ownerId;
+    const direction: SiegeDirection =
+      ownerId === viewerId ? 'incoming' : siege.attackerId === viewerId ? 'outgoing' : 'rival';
+    if (direction === 'rival' && !showAll) {
+      const taps = viewer?.wiretapTurnsRemaining ?? {};
+      const tapped = (taps[siege.attackerId] ?? 0) > 0 || (ownerId !== null && (taps[ownerId] ?? 0) > 0);
+      if (!tapped) continue;
+    }
+    const owner = ownerId ? state.syndicates[ownerId] : undefined;
+    const defense = racket.baseDefense + (owner?.assignedGuards[racket.id] ?? 0);
+    rows.push({
+      id: siege.id,
+      direction,
+      attackerName: attacker.name,
+      racketName: racket.name,
+      ownerName: owner ? owner.name : 'Neutral',
+      prepTier: siege.prepTier,
+      telegraphedWeek: siege.telegraphedWeek,
+      resolveWeek: siege.resolveWeek,
+      odds: formatPreview(calculateRiskProbabilities(calculateSyndicateAttack(attacker.crew), defense, siege.prepTier)),
+    });
+  }
+  return rows.sort((a, b) => a.resolveWeek - b.resolveWeek || a.id.localeCompare(b.id));
+}
+
+export interface SundayBill {
+  crewPayroll: number;
+  turfUpkeep: number;
+  ownedRackets: number;
+  total: number;
+  projectedYield: number;
+}
+
+/** What a syndicate owes and earns this Sunday (Crew Payroll + Turf Upkeep vs racket yield). */
+export function buildSundayBill(state: GameState, syndicateId: string): SundayBill | null {
+  const s = state.syndicates[syndicateId];
+  if (!s) return null;
+  const ownedRackets = countOwnedRackets(syndicateId, state.rackets);
+  const crewPayroll = calculateSyndicatePayroll(s.crew);
+  const upkeep = turfUpkeep(ownedRackets);
+  return {
+    crewPayroll,
+    turfUpkeep: upkeep,
+    ownedRackets,
+    total: crewPayroll + upkeep,
+    projectedYield: calculateProjectedRacketYield(syndicateId, state.rackets),
+  };
+}
+
+/** Week a SEIZE declared now would resolve: this week if neutral, week + 2 if rival-owned. */
+export function seizeResolveWeek(state: GameState, racketId: string): number {
+  const racket = state.rackets[racketId];
+  return racket?.ownerId ? state.week + SIEGE_LEAD_WEEKS : state.week;
 }

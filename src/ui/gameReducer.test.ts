@@ -48,4 +48,12 @@ describe('gameReducer', () => {
     expect(fresh.seed).toBe(9);
     expect(fresh.game.isGameOver).toBe(false);
   });
+
+  it('a SEIZE on a rival-owned racket reports that it was queued as a siege', () => {
+    const s0 = initUiState(5);
+    const game = { ...s0.game, rackets: { ...s0.game.rackets, fish_market: { ...s0.game.rackets.fish_market!, ownerId: 'ai_1' } } };
+    const s1 = gameReducer({ ...s0, game }, { type: 'ACTION', action: { type: 'SEIZE', racketId: 'fish_market', prepTier: 0 } });
+    expect(s1.message).toBe('SEIZE queued as siege — resolves at the start of week 3');
+    expect(s1.game.activeSieges).toHaveLength(1);
+  });
 });

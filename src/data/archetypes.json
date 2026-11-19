@@ -4,8 +4,8 @@
     "name": "The Warlord",
     "weights": {
       "greed": 0.9,
-      "aggression": 1.8,
-      "caution": 0.6,
+      "aggression": 1.4,
+      "caution": 1.0,
       "revenge": 1.5
     },
     "signatureBehavior": "Heavy Crew recruitment; rushes rival turf early."

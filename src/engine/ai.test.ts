@@ -15,13 +15,23 @@ import {
   selectBestAIAction,
   upfrontCost,
 } from './ai';
-import { AI_CASH_RESERVE, AI_RICO_EMERGENCY, AI_SAFE_HEAT } from './constants';
+import {
+  AI_CASH_RESERVE,
+  AI_FRAME_SELF_HEAT_PENALTY,
+  AI_LEADER_REARM_BONUS,
+  AI_NEAR_DOMINATION_BONUS,
+  AI_RICO_EMERGENCY,
+  AI_SAFE_HEAT,
+  AI_ZERO_CREW_REARM_BONUS,
+  MAX_FRAMES_PER_WEEK,
+} from './constants';
 import {
   advanceWeek,
   applyAction,
   calculateProjectedRacketYield,
   createInitialGameState,
   projectSundayHeat,
+  turfUpkeep,
 } from './reducer';
 import type { GameState, SyndicateState } from './types';
 
@@ -258,7 +268,10 @@ describe('scoreCandidateAction — emergencyModifiers', () => {
       useClean: true,
       targetSyndicateId: 'ai_2',
     });
-    expect(scored.scores.emergencyModifiers).toBe(0);
+    // The +75 self-bribe emergency never applies to a frame. Since W3-T8b the framer's own
+    // Heat >= AI_FRAME_SELF_HEAT suppresses the frame instead.
+    expect(scored.scores.emergencyModifiers).not.toBe(75);
+    expect(scored.scores.emergencyModifiers).toBe(-AI_FRAME_SELF_HEAT_PENALTY);
   });
 
   it('clamps RECRUIT to -999 when projected Sunday cash < payroll', () => {
@@ -380,11 +393,22 @@ describe('Archetype behavioral tendencies', () => {
       type: 'LAUNDER',
       amount: 10000,
     });
-    // Should have an extra ev bonus for the Banker archetype (+20)
     expect(scored.scores.evScore).toBeGreaterThan(0);
 
+    // W3-T8b (approved balance change): with < 3 rackets the Banker builds its income engine
+    // first, so a SEIZE now outranks the launder. Previously asserted LAUNDER was top.
     const ranked = evaluateCandidateActions(state, 'ai_2');
-    expect(ranked[0]!.action.type).toBe('LAUNDER');
+    expect(ranked[0]!.action.type).toBe('SEIZE');
+  });
+
+  it('Banker (ai_2) launder bonus (+20) applies only once it owns >= 3 rackets', () => {
+    const base = patchSyndicate(createInitialGameState(1), 'ai_2', { dirtyCash: 15000, cleanCash: 0, heat: 10 });
+    const launder = { type: 'LAUNDER', amount: 10000 } as const;
+    expect(scoreCandidateAction(base, 'ai_2', launder).scores.evScore).toBe(50);
+    const two = giveRackets(base, 'ai_2', ['fish_market', 'union_pier']);
+    expect(scoreCandidateAction(two, 'ai_2', launder).scores.evScore).toBe(50);
+    const three = giveRackets(base, 'ai_2', ['fish_market', 'union_pier', 'bonded_warehouse']);
+    expect(scoreCandidateAction(three, 'ai_2', launder).scores.evScore).toBe(70);
   });
 
   it('Rat (ai_3) should prioritize framing rivals with high heat', () => {
@@ -896,5 +920,112 @@ describe('W3-T8a — selection is unchanged by the linear scan', () => {
         if (step % 3 === 2) state = advanceWeek(state);
       }
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 14. W3-T8b AI rules (scoring only)
+// ---------------------------------------------------------------------------
+
+const FIVE_LEADER_RACKETS = ['dive_bar', 'velvet_club', 'sportsbook_parlor', 'scrap_yard', 'trucking_depot'];
+
+describe('W3-T8b — AI counter-rearming', () => {
+  const recruit = { type: 'RECRUIT', tier: 'thug', count: 1 } as const;
+
+  it('gives a weak syndicate +AI_LEADER_REARM_BONUS to RECRUIT while a >= 5-racket leader exists', () => {
+    const led = giveRackets(createInitialGameState(1), 'ai_3', FIVE_LEADER_RACKETS);
+    const weak = patchSyndicate(led, 'ai_2', { crew: { thug: 2, enforcer: 0, hitman: 0 }, dirtyCash: 20000 });
+    expect(scoreCandidateAction(weak, 'ai_2', recruit).scores.coalitionBonus).toBe(AI_LEADER_REARM_BONUS);
+
+    const strong = patchSyndicate(led, 'ai_2', { dirtyCash: 20000 }); // 4 thugs = attack 12, not weak
+    expect(scoreCandidateAction(strong, 'ai_2', recruit).scores.coalitionBonus).toBe(0);
+
+    const noLeader = patchSyndicate(createInitialGameState(1), 'ai_2', {
+      crew: { thug: 2, enforcer: 0, hitman: 0 },
+      dirtyCash: 20000,
+    });
+    expect(scoreCandidateAction(noLeader, 'ai_2', recruit).scores.coalitionBonus).toBe(0);
+    // The leader itself never gets the anti-leader bonus.
+    const leaderWeak = patchSyndicate(led, 'ai_3', { crew: { thug: 2, enforcer: 0, hitman: 0 }, dirtyCash: 50000 });
+    expect(scoreCandidateAction(leaderWeak, 'ai_3', recruit).scores.coalitionBonus).toBe(0);
+  });
+
+  it('gives a crewless syndicate +AI_ZERO_CREW_REARM_BONUS (no leader needed), unless the hire is unaffordable', () => {
+    const crewless = patchSyndicate(createInitialGameState(1), 'ai_2', {
+      crew: { thug: 0, enforcer: 0, hitman: 0 },
+      dirtyCash: 20000,
+    });
+    const scored = scoreCandidateAction(crewless, 'ai_2', recruit);
+    expect(scored.scores.emergencyModifiers).toBe(AI_ZERO_CREW_REARM_BONUS);
+    expect(scored.reasoning).toContain('zero-crew rearm');
+
+    // $800 hire + $250 payroll + $1,000 reserve = $2,050 needed; $2,049 is clamped by the guard.
+    const broke = patchSyndicate(crewless, 'ai_2', { dirtyCash: 2049 });
+    expect(scoreCandidateAction(broke, 'ai_2', recruit).scores.totalScore).toBe(-999);
+  });
+});
+
+describe('W3-T8b — SEIZE scoring with Empire Overhead', () => {
+  const hitSquad = { thug: 0, enforcer: 0, hitman: 10 };
+
+  it('adds the near-domination bonus at >= 6 rackets only when the SEIZE pays for itself after upkeep', () => {
+    let state = giveRackets(createInitialGameState(1), 'ai_1', [
+      'dive_bar', 'velvet_club', 'sportsbook_parlor', 'scrap_yard', 'trucking_depot', 'chemical_plant',
+    ]);
+    state = patchSyndicate(state, 'ai_1', { crew: hitSquad, dirtyCash: 100000 });
+    // Uptown yields $5,800/wk, more than the $4,200/wk upkeep step from 6 to 7 rackets: EV >= 0.
+    const uptown = scoreCandidateAction(state, 'ai_1', { type: 'SEIZE', racketId: 'grand_casino', prepTier: 2 });
+    expect(uptown.scores.evScore).toBeGreaterThanOrEqual(0);
+    expect(uptown.scores.turfScore).toBe(25 + 15 + AI_NEAR_DOMINATION_BONUS);
+    // Docks yields $1,300/wk, far less than the upkeep step: EV < 0, no bonus.
+    const docks = scoreCandidateAction(state, 'ai_1', { type: 'SEIZE', racketId: 'fish_market', prepTier: 2 });
+    expect(docks.scores.evScore).toBeLessThan(0);
+    expect(docks.scores.turfScore).toBe(25);
+  });
+
+  it('values an upkeep-free racket over min(8, remaining weeks)', () => {
+    const early = patchSyndicate(createInitialGameState(1), 'ai_2', { dirtyCash: 20000 });
+    const late = { ...early, week: 50 };
+    const action = { type: 'SEIZE', racketId: 'fish_market', prepTier: 1 } as const;
+    expect(scoreCandidateAction(early, 'ai_2', action).scores.evScore).toBeGreaterThan(
+      scoreCandidateAction(late, 'ai_2', action).scores.evScore
+    );
+  });
+
+  it('counts current Turf Upkeep as part of the Sunday bill', () => {
+    const state = giveRackets(createInitialGameState(1), 'ai_1', FIVE_LEADER_RACKETS);
+    expect(buildScoringContext(state, 'ai_1').payroll).toBe(1000 + turfUpkeep(5));
+  });
+
+  it('liquidity guard also covers the Turf Upkeep a SEIZE would add', () => {
+    // 3 rackets -> 4 adds $600/wk. SEIZE prep 0 = $1,500. Floor = 1,000 payroll + 600 + 1,000 reserve.
+    const base = giveRackets(createInitialGameState(1), 'ai_1', ['fish_market', 'union_pier', 'bonded_warehouse']);
+    const action = { type: 'SEIZE', racketId: 'dive_bar', prepTier: 0 } as const;
+    const tight = patchSyndicate(base, 'ai_1', { dirtyCash: 1500 + 2600 - 1 });
+    const ok = patchSyndicate(base, 'ai_1', { dirtyCash: 1500 + 2600 });
+    expect(scoreCandidateAction(tight, 'ai_1', action).scores.totalScore).toBe(-999);
+    expect(scoreCandidateAction(ok, 'ai_1', action).scores.totalScore).not.toBe(-999);
+  });
+});
+
+describe('W3-T8b — AI candidates mirror the siege and frame caps', () => {
+  it('offers no rival-SEIZE once two sieges are queued, and no frame once the weekly frame is used', () => {
+    let state = giveRackets(createInitialGameState(1), 'ai_1', ['fish_market', 'union_pier', 'bonded_warehouse']);
+    state = patchSyndicate(state, 'ai_2', { dirtyCash: 50000 });
+    state = applyAction(state, 'ai_2', { type: 'SEIZE', racketId: 'fish_market', prepTier: 0 }).state;
+    // One siege queued: the besieged racket is skipped, others still offered.
+    let candidates = generateCandidateActions(state, 'ai_2');
+    expect(candidates.some((a) => a.type === 'SEIZE' && a.racketId === 'fish_market')).toBe(false);
+    expect(candidates.some((a) => a.type === 'SEIZE' && a.racketId === 'union_pier')).toBe(true);
+
+    state = applyAction(state, 'ai_2', { type: 'SEIZE', racketId: 'union_pier', prepTier: 0 }).state;
+    candidates = generateCandidateActions(state, 'ai_2');
+    expect(candidates.some((a) => a.type === 'SEIZE' && state.rackets[a.racketId]!.ownerId === 'ai_1')).toBe(false);
+    expect(candidates.some((a) => a.type === 'SEIZE' && state.rackets[a.racketId]!.ownerId === null)).toBe(true);
+
+    state = patchSyndicate(state, 'ai_2', { framesThisWeek: MAX_FRAMES_PER_WEEK, cleanCash: 10000 });
+    candidates = generateCandidateActions(state, 'ai_2');
+    expect(candidates.some((a) => a.type === 'BRIBE' && !!a.targetSyndicateId)).toBe(false);
+    expect(candidates.some((a) => a.type === 'BRIBE' && !a.targetSyndicateId)).toBe(true);
   });
 });
