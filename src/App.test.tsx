@@ -1,14 +1,28 @@
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { App } from './App';
+import { GreyboxApp } from './ui/GreyboxApp';
+import { isGreyboxRequested } from './ui/route';
 
 describe('App Smoke Test', () => {
   it('exports App component as a function', () => {
     expect(typeof App).toBe('function');
   });
 
-  it('renders the greybox dashboard and End Week control', () => {
+  it('renders the Zinc ledger shell by default and detects ?greybox=1', () => {
     const html = renderToString(<App />);
+    expect(html).toContain('Your Wallet');
+    expect(html).toContain('Street Cash');
+    expect(html).toContain('End Week');
+    expect(html).toContain('[4] Weekly Log');
+    expect(html).toContain('Greybox View');
+    expect(isGreyboxRequested('?greybox=1')).toBe(true);
+    expect(isGreyboxRequested('')).toBe(false);
+    expect(isGreyboxRequested('?greybox=0')).toBe(false);
+  });
+
+  it('renders the greybox dashboard and End Week control', () => {
+    const html = renderToString(<GreyboxApp />);
     expect(html).toContain('Dashboard');
     expect(html).toContain('End Week');
     expect(html).toContain('Player Syndicate');
@@ -18,7 +32,7 @@ describe('App Smoke Test', () => {
   });
 
   it('shows the goal, the Guided Intro toggle and Phase 1 locks on week 1', () => {
-    const html = renderToString(<App />);
+    const html = renderToString(<GreyboxApp />);
     expect(html).toContain('Goal: Highest Net Worth after Week 28');
     expect(html).toContain('[Guided Intro: ON]');
     expect(html).toContain('Phase 1: Build Your Base');

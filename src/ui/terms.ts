@@ -129,6 +129,42 @@ const ACTION_WORDS: ReadonlyArray<[RegExp, string]> = [
   [/^PASS succeeded/, 'Skipped one action'],
 ];
 
+/** Word-level engine -> plain-English replacements shared by status, event and rejection text. */
+function plainWords(text: string): string {
+  return text
+    .replace(/federal RICO indictment/gi, 'Police Bust / Arrest')
+    .replace(/RICO indictment/gi, 'Police Bust / Arrest')
+    .replace(/Turf Upkeep/gi, 'Size Tax')
+    .replace(/DirtyCash/gi, 'Street Cash')
+    .replace(/CleanCash/gi, 'Safe Cash')
+    .replace(/Launder limit reached/g, 'Already banked this week')
+    .replace(/Frame limit reached/g, 'Already snitched this week')
+    .replace(/\bLaunder\b/g, 'Bank')
+    .replace(/\bsiege(s)?\b/gi, (_m, pl: string | undefined) => `raid${pl ?? ''}`)
+    .replace(/\brackets?\b/gi, (m) => (m.toLowerCase() === 'racket' ? 'business' : 'businesses'));
+}
+
+/** Capitalise the first letter ("raid on X" -> "Raid on X"); keeps already-capitalised text. */
+function sentenceCase(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/**
+ * Display-time translation of a Sunday-ledger / start-of-week engine event. Engine strings are
+ * unchanged; unknown text passes through with only word-level replacement.
+ */
+export function plainEventText(event: string): string {
+  return plainWords(event)
+    .replace(/was called off \(attacker eliminated\)/, 'was called off (attacker is out)')
+    .replace(/Police Raid hit ([^!]+)!/, 'Police raid hit $1!')
+    .replace(/Start of week (\d+): /, 'Week $1 start: ');
+}
+
+/** Display-time translation of an `applyAction` rejection reason ("Rejected: ..." prefix kept). */
+export function plainRejection(reason: string): string {
+  return sentenceCase(plainWords(reason));
+}
+
 /**
  * Display-time translation of the UI reducer's status line (which keeps engine verbs for logs and
  * tests) into plain English. Unknown text passes through unchanged.
@@ -141,11 +177,5 @@ export function plainStatusMessage(message: string): string {
       break;
     }
   }
-  return out
-    .replace(/DirtyCash/g, 'Street Cash')
-    .replace(/CleanCash/g, 'Safe Cash')
-    .replace(/Launder limit reached/g, 'Already banked this week')
-    .replace(/Frame limit reached/g, 'Already snitched this week')
-    .replace(/\bsiege(s)?\b/g, 'raid$1')
-    .replace(/\brackets?\b/g, (m) => (m === 'racket' ? 'business' : 'businesses'));
+  return plainWords(out);
 }

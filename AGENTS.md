@@ -15,7 +15,7 @@ You are building **Syndicate Ledger**, a deterministic, client-side turn-based c
 - **Engine Purity (`/src/engine/`):** Files inside `/src/engine/` MUST be 100% pure TypeScript. They are strictly forbidden from importing `react`, `zustand`, DOM/`window` APIs, `localStorage`, or CSS. The engine must execute headlessly in Node.js for CLI Monte Carlo simulations.
 - **Strict Determinism:** `Math.random()`, `Date.now()`, and `crypto.randomUUID()` are **BANNED** inside `/src/engine/`. All randomness must flow through the seeded `mulberry32` PRNG state stored in `GameState.rngState`. Given an identical seed and action sequence, `advanceWeek()` must produce a bit-identical `GameState`.
 - **Integer Math Only:** Store all currency (`dirtyCash`, `cleanCash`, payouts, payroll) as **whole integers** (`$1` units). Store probabilities and Heat as integers (`0` to `100`). Never leave unrounded floats in `GameState`.
-- **Immutability & Replay Snapshots:** Engine reducers must treat input `GameState` as read-only and return a new `GameState` plus structured `DecisionTrace` logs so the 52-week Replay Scrubber can inspect any historical week.
+- **Immutability & Replay Snapshots:** Engine reducers must treat input `GameState` as read-only and return a new `GameState` plus structured `DecisionTrace` logs so the 28-week Replay Scrubber can inspect any historical week.
 - **Zero-Cheat AI Symmetry:** AI syndicates MUST validate and execute actions through the exact same `applyAction()` and weekly economy functions used by the human player. Never give AI hidden resource bonuses or rule exemptions.
 
 ## 3. Code & UI Standards
