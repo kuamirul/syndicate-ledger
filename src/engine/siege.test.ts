@@ -7,6 +7,7 @@ import {
   GRUDGE_MAX,
   MAX_FRAMES_PER_WEEK,
   MAX_OUTGOING_SIEGES,
+  MAX_WEEKS,
   SIEGE_LEAD_WEEKS,
 } from './constants';
 import {
@@ -116,9 +117,9 @@ describe('W3-T8b — rival SEIZE is a queued 2-turn siege', () => {
     expect(week3.history.at(-1)!.events.some((e) => e.includes('called off (already theirs)'))).toBe(true);
   });
 
-  it('rejects a siege that would resolve after week 52 (neutral SEIZE still allowed)', () => {
+  it(`rejects a siege that would resolve after week ${MAX_WEEKS} (neutral SEIZE still allowed)`, () => {
     const state = withRackets('ai_1', ['fish_market']);
-    state.week = 51;
+    state.week = MAX_WEEKS - 1;
     const rival = applyAction(state, 'player', seize('fish_market'));
     expect(rival.result.executed).toBe(false);
     expect(rival.result.reason).toMatch(/Too late/);

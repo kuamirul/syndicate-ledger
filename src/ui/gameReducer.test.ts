@@ -56,4 +56,14 @@ describe('gameReducer', () => {
     expect(s1.message).toBe('SEIZE queued as siege — resolves at the start of week 3');
     expect(s1.game.activeSieges).toHaveLength(1);
   });
+
+  it('Guided Intro defaults ON, toggles, and survives NEW_GAME without touching the engine state', () => {
+    const s0 = initUiState(5);
+    expect(s0.guidedIntro).toBe(true);
+    const off = gameReducer(s0, { type: 'SET_GUIDED_INTRO', on: false });
+    expect(off.guidedIntro).toBe(false);
+    expect(off.game).toBe(s0.game);
+    expect(gameReducer(off, { type: 'NEW_GAME', seed: 6 }).guidedIntro).toBe(false);
+    expect(gameReducer(s0, { type: 'NEW_GAME', seed: 6 }).guidedIntro).toBe(true);
+  });
 });

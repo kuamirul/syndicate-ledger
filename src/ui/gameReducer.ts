@@ -12,21 +12,28 @@ export interface UiState {
   seed: number;
   /** Feedback for the last player action (rejection reason or outcome). */
   message: string;
+  /** UI-only staged unlock of player verbs (M2-T0): locked buttons are disabled in GreyboxApp.
+   * Never consulted by the engine or the AI; applyAction stays the only legality check. */
+  guidedIntro: boolean;
 }
 
 export type UiAction =
   | { type: 'ACTION'; action: Action }
   | { type: 'END_WEEK' }
-  | { type: 'NEW_GAME'; seed: number };
+  | { type: 'NEW_GAME'; seed: number }
+  | { type: 'SET_GUIDED_INTRO'; on: boolean };
 
-export function initUiState(seed: number = DEFAULT_SEED): UiState {
-  return { game: createInitialGameState(seed), seed, message: '' };
+export function initUiState(seed: number = DEFAULT_SEED, guidedIntro = true): UiState {
+  return { game: createInitialGameState(seed), seed, message: '', guidedIntro };
 }
 
 export function gameReducer(state: UiState, ua: UiAction): UiState {
   switch (ua.type) {
     case 'NEW_GAME':
-      return initUiState(ua.seed);
+      return initUiState(ua.seed, state.guidedIntro);
+
+    case 'SET_GUIDED_INTRO':
+      return { ...state, guidedIntro: ua.on };
 
     case 'ACTION': {
       const { state: game, result } = applyAction(state.game, PLAYER_ID, ua.action);

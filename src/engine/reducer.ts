@@ -14,6 +14,8 @@ import {
   LAUNDER_FEE_PCT,
   LAUNDER_MAX,
   MAX_FRAMES_PER_WEEK,
+  MAX_LAUNDERS_PER_WEEK,
+  ZERO_CREW_JOB_ID,
   MAX_OUTGOING_SIEGES,
   MAX_WEEKS,
   SIEGE_LEAD_WEEKS,
@@ -202,6 +204,7 @@ export function createInitialGameState(seed: number = 42): GameState {
       grudge: {},
       wiretapTurnsRemaining: {},
       framesThisWeek: 0,
+      laundersThisWeek: 0,
     },
     ai_1: {
       id: 'ai_1',
@@ -219,6 +222,7 @@ export function createInitialGameState(seed: number = 42): GameState {
       grudge: {},
       wiretapTurnsRemaining: {},
       framesThisWeek: 0,
+      laundersThisWeek: 0,
     },
     ai_2: {
       id: 'ai_2',
@@ -236,6 +240,7 @@ export function createInitialGameState(seed: number = 42): GameState {
       grudge: {},
       wiretapTurnsRemaining: {},
       framesThisWeek: 0,
+      laundersThisWeek: 0,
     },
     ai_3: {
       id: 'ai_3',
@@ -253,6 +258,7 @@ export function createInitialGameState(seed: number = 42): GameState {
       grudge: {},
       wiretapTurnsRemaining: {},
       framesThisWeek: 0,
+      laundersThisWeek: 0,
     },
   };
 
@@ -415,6 +421,10 @@ export function applyAction(
         return { state: prevState, result: { executed: false, success: false, reason: 'Invalid street job ID' } };
       }
 
+      if (calculateTotalCrewCount(actor.crew) === 0 && job.id !== ZERO_CREW_JOB_ID) {
+        return { state: prevState, result: { executed: false, success: false, reason: 'No crew: only the Corner Shakedown can be run' } };
+      }
+
       const prep = PREP_CONFIG[action.prepTier];
       if (actor.dirtyCash < prep.cost) {
         return { state: prevState, result: { executed: false, success: false, reason: 'Cannot afford preparation cost' } };
@@ -473,6 +483,10 @@ export function applyAction(
 
       if (racket.ownerId === syndicateId) {
         return { state: prevState, result: { executed: false, success: false, reason: 'Syndicate already owns this racket' } };
+      }
+
+      if (calculateTotalCrewCount(actor.crew) === 0) {
+        return { state: prevState, result: { executed: false, success: false, reason: 'No crew: hire crew before taking turf' } };
       }
 
       // SEIZE on a rival-owned racket is a 2-turn Siege (SPEC §2): paid now, resolved later.
@@ -578,7 +592,11 @@ export function applyAction(
     case 'LAUNDER': {
       const amount = Math.floor(action.amount);
       if (amount <= 0 || amount > LAUNDER_MAX) {
-        return { state: prevState, result: { executed: false, success: false, reason: 'Launder amount must be between $1 and $10,000' } };
+        return { state: prevState, result: { executed: false, success: false, reason: `Launder amount must be between $1 and $${LAUNDER_MAX.toLocaleString('en-US')}` } };
+      }
+
+      if (actor.laundersThisWeek >= MAX_LAUNDERS_PER_WEEK) {
+        return { state: prevState, result: { executed: false, success: false, reason: `Launder limit reached (${MAX_LAUNDERS_PER_WEEK} per week)` } };
       }
 
       if (actor.dirtyCash < amount) {
@@ -588,6 +606,7 @@ export function applyAction(
       const cleanReceived = Math.floor((amount * (100 - LAUNDER_FEE_PCT)) / 100);
       actor.dirtyCash -= amount;
       actor.cleanCash += cleanReceived;
+      actor.laundersThisWeek += 1;
 
       return { state: nextState, result: { executed: true, success: true, payout: cleanReceived } };
     }
@@ -670,6 +689,10 @@ function resolveDueSieges(state: GameState): string[] {
       events.push(`${prefix} was called off (already theirs).`);
       continue;
     }
+    if (calculateTotalCrewCount(attacker.crew) === 0) {
+      events.push(`${prefix} was called off (no crew left).`);
+      continue;
+    }
     const assault = resolveAssault(state, attacker.id, racket.id, siege.prepTier);
     events.push(
       `${prefix} ${assault.seized ? 'took the racket' : 'failed'} (${assault.outcome}, roll ${assault.roll}, lost ${assault.casualtiesLost} crew).`
@@ -697,7 +720,7 @@ export function tickSieges(prevState: GameState): { state: GameState; events: st
  * 4. High-Heat Hazard (>=70 heat: 25% chance of 20% dirty cash raid).
  * 5. RICO indictment (2 consecutive weeks at 100 heat).
  * 6. Wiped Out check (0 crew, 0 rackets, < $1,000 total cash).
- * 7. Domination win check (>=8 rackets with <100 heat) & Week 52 Kingpin valuation check.
+ * 7. Domination win check (>=8 rackets with <100 heat) & Week MAX_WEEKS (28) Kingpin valuation check.
  * 8. Append WeekSnapshot to history and advance week.
  */
 export function advanceWeek(prevState: GameState): GameState {
@@ -878,7 +901,7 @@ export function advanceWeek(prevState: GameState): GameState {
       nextState.winnerId = winner.id;
       nextState.winReason = 'DOMINATION';
     } else if (nextState.week >= MAX_WEEKS) {
-      // Condition C: Week 52 Kingpin Tiebreaker
+      // Condition C: Week MAX_WEEKS (28) Kingpin Tiebreaker
       livingSyndicates.sort(
         (a, b) =>
           calculateSyndicateValuation(b, nextState.rackets) -
@@ -908,6 +931,7 @@ export function advanceWeek(prevState: GameState): GameState {
     if (!s.isEliminated) {
       s.actionPoints = 3;
       s.framesThisWeek = 0;
+      s.laundersThisWeek = 0;
       for (const [targetId, turns] of Object.entries(s.wiretapTurnsRemaining)) {
         if (turns > 0) {
           s.wiretapTurnsRemaining[targetId] = turns - 1;

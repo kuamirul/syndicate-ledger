@@ -16,4 +16,17 @@ describe('App Smoke Test', () => {
     expect(html).toContain('[Active Sieges]');
     expect(html).toContain('Turf Upkeep');
   });
+
+  it('shows the goal, the Guided Intro toggle and Phase 1 locks on week 1', () => {
+    const html = renderToString(<App />);
+    expect(html).toContain('Goal: Highest Net Worth after Week 28');
+    expect(html).toContain('[Guided Intro: ON]');
+    expect(html).toContain('Phase 1: Build Your Base');
+    expect(html).toContain('Run Cash Job');
+    expect(html).toContain('Claim Empty Business');
+    expect(html).toContain('Hire Crew');
+    expect(html).toContain('[Unlocks Week 3]');
+    expect(html).toContain('[Unlocks Week 4]');
+    expect(html).not.toMatch(/>(Extort|Launder|Wiretap target|Frame target)/);
+  });
 });

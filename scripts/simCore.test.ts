@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { MAX_WEEKS } from '../src/engine/constants';
 import { assignArchetypes, formatReport, playGame, runSimulation, SEAT_IDS } from './simCore';
 
 describe('sim core', () => {
@@ -19,7 +20,7 @@ describe('sim core', () => {
     const b = playGame(123, 0);
     expect(a).toEqual(b);
     expect(a.weeks).toBeGreaterThan(0);
-    expect(a.weeks).toBeLessThanOrEqual(52);
+    expect(a.weeks).toBeLessThanOrEqual(MAX_WEEKS);
   });
 
   it('runSimulation aggregates consistently and is reproducible', () => {

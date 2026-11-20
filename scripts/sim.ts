@@ -22,7 +22,7 @@ const elapsed = performance.now() - start;
 
 console.log(formatReport(report, elapsed));
 console.log(`ms/game-week: ${(elapsed / (report.avgWeeks * games)).toFixed(3)} (target <= 0.25)`);
-const BUDGET_MS_PER_1000 = 12000; // W3-T8b: full-length (~48-week) games
+const BUDGET_MS_PER_1000 = 7000; // M2-T0: 28-week games
 if (games >= 1000 && elapsed > (BUDGET_MS_PER_1000 * games) / 1000) {
   console.warn(`\nWARNING: ${games} games took ${elapsed.toFixed(0)} ms (target < ${(BUDGET_MS_PER_1000 * games) / 1000} ms)`);
 }

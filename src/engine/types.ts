@@ -122,6 +122,7 @@ export interface SyndicateState {
   wiretapTurnsRemaining: Record<string, number>;
   /** BRIBE (Frame) actions taken this week; reset with AP (max MAX_FRAMES_PER_WEEK). */
   framesThisWeek: number;
+  laundersThisWeek: number;
 }
 
 export interface SyndicateSnapshot {
