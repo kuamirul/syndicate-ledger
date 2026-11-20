@@ -31,12 +31,16 @@ export const ACTION_POINTS_PER_WEEK = 3;
 
 /** Weeks between declaring a siege (SEIZE on a rival-owned racket) and its resolution. */
 export const SIEGE_LEAD_WEEKS = 2;
-/** Last week of a run (SPEC §1); a siege must resolve on or before it. */
-export const MAX_WEEKS = 52;
+/** Last week of a run (SPEC §1, M2-T0: 28); a siege must resolve on or before it. */
+export const MAX_WEEKS = 28;
 /** Max active outgoing sieges per syndicate (game rule, same for player and AI); still max 1 per racket. */
 export const MAX_OUTGOING_SIEGES = 2;
 /** Max BRIBE (Frame) actions per syndicate per week (game rule; self-BRIBE is not limited). */
 export const MAX_FRAMES_PER_WEEK = 1;
+/** Max LAUNDER actions per syndicate per week (game rule, M2-T0). */
+export const MAX_LAUNDERS_PER_WEEK = 1;
+/** The only street job a syndicate with zero crew may run (game rule, M2-T0). */
+export const ZERO_CREW_JOB_ID = 'shakedown';
 
 // --- Grudge (W3-T8b). Game rule: stored grudge is clamped and cools every Sunday.
 

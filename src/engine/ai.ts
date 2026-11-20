@@ -33,6 +33,7 @@ import {
   LAUNDER_FEE_PCT,
   LAUNDER_MAX,
   MAX_FRAMES_PER_WEEK,
+  MAX_LAUNDERS_PER_WEEK,
   MAX_OUTGOING_SIEGES,
   MAX_WEEKS,
   SIEGE_LEAD_WEEKS,
@@ -175,8 +176,9 @@ export function generateCandidateActions(
 
   const actions: Action[] = [];
   const ownedRacketsCount = countOwnedRackets(actor.id, state.rackets);
-  // The AI never sends an empty crew on a job or assault (AI judgement, not a game rule:
-  // the floored risk odds would otherwise make 0-crew vault jobs and assaults "+EV").
+  // The AI never sends an empty crew on a job or assault. applyAction's 0-crew floor (M2-T0) already
+  // rejects every 0-crew SEIZE and every 0-crew job except ZERO_CREW_JOB_ID; the AI is stricter still
+  // and skips that last legal job too (AI judgement: it rearms via RECRUIT instead).
   const hasCrew = calculateTotalCrewCount(actor.crew) > 0;
 
   // 1. EXTORT actions (6 jobs x affordable prep tiers)
@@ -197,7 +199,7 @@ export function generateCandidateActions(
 
   // 2. SEIZE actions (Rival or Neutral rackets x affordable prep tiers)
   // Mirrors applyAction's siege legality: max MAX_OUTGOING_SIEGES queued, one per racket, and
-  // it must resolve by week 52.
+  // it must resolve by MAX_WEEKS.
   const besieging = new Set(
     state.activeSieges.filter((s) => s.attackerId === actor.id).map((s) => s.racketId)
   );
@@ -236,8 +238,8 @@ export function generateCandidateActions(
     }
   }
 
-  // 4. LAUNDER actions (Convert up to $10,000 DirtyCash to CleanCash)
-  if (actor.dirtyCash >= 1000) {
+  // 4. LAUNDER actions (up to LAUNDER_MAX; at most MAX_LAUNDERS_PER_WEEK per week, mirrors applyAction)
+  if (actor.dirtyCash >= 1000 && actor.laundersThisWeek < MAX_LAUNDERS_PER_WEEK) {
     const maxLaunder = Math.min(LAUNDER_MAX, actor.dirtyCash);
     actions.push({ type: 'LAUNDER', amount: maxLaunder });
 

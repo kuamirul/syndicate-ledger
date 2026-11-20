@@ -16,7 +16,7 @@ import type {
 } from '../src/engine/types';
 
 export const SEAT_IDS = ['player', 'ai_1', 'ai_2', 'ai_3'] as const;
-const MAX_WEEKS = 60; // safety guard; advanceWeek ends the game at week 52
+const MAX_WEEKS = 40; // safety guard; advanceWeek ends the game at week 28
 
 export interface GameSummary {
   seed: number;

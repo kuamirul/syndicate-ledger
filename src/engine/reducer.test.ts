@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { MAX_WEEKS } from './constants';
 import {
   advanceWeek,
   applyAction,
@@ -328,9 +329,9 @@ describe('Weekly Turn Flow & Reducer Engine', () => {
       expect(nextState.winReason).toBe('DOMINATION');
     });
 
-    it('awards Week 52 Kingpin Tiebreaker to highest valuation syndicate', () => {
+    it(`awards Week ${MAX_WEEKS} Kingpin Tiebreaker to highest valuation syndicate`, () => {
       const state = createInitialGameState(42);
-      state.week = 52;
+      state.week = MAX_WEEKS;
       state.syndicates.player!.cleanCash = 50000; // Valuation = 100k + cash
 
       const nextState = advanceWeek(state);
