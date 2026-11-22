@@ -13,6 +13,7 @@
     "sim": "tsx scripts/sim.ts"
   },
   "dependencies": {
+    "@radix-ui/react-dialog": "^1.3.1",
     "@radix-ui/react-popover": "^1.3.1",
     "@radix-ui/react-separator": "^1.2.0",
     "@radix-ui/react-slot": "^1.5.0",

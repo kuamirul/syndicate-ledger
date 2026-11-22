@@ -179,3 +179,29 @@ export function plainStatusMessage(message: string): string {
   }
   return plainWords(out);
 }
+
+/** Spend-clarity vocabulary shared by every spending control (M2-T2). */
+export const SPEND_TERMS = {
+  shortfallBadge: '[Sunday Shortfall Risk]',
+  shortfallHint: 'After Sunday bills you could owe more than you hold; a business would be sold at half value.',
+  requiresCrew: 'Requires ≥1 Crew',
+  alreadyBanked: 'Already Banked This Week (1/1)',
+  alreadySnitched: 'Already Snitched This Week (1/1)',
+  noActions: 'No actions left',
+  confirm: 'Confirm & Spend 1 Action',
+} as const;
+
+/** Plain-English roll outcomes (Clean / Messy / Botched). */
+export const RISK_OUTCOME_LABELS = {
+  CLEAN: 'Clean',
+  MESSY: 'Messy',
+  BOTCHED: 'Botched',
+} as const;
+
+/** Section titles for the Operations tab and their Guided Intro lock text. */
+export const OPS_SECTIONS = {
+  jobs: { label: 'Run Cash Job', subtitle: 'Six jobs, safest to riskiest. Odds update with your crew.' },
+  crew: { label: 'Hire Crew', subtitle: 'More muscle means better odds, but every crew member is paid each Sunday.' },
+  protect: { label: 'Protect Profits', subtitle: 'Bank cash and cool the police.' },
+  covert: { label: 'Covert Ops', subtitle: 'Watch and sabotage rivals.' },
+} as const;

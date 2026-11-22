@@ -9,6 +9,17 @@ describe('App Smoke Test', () => {
     expect(typeof App).toBe('function');
   });
 
+  it('renders the Operations tab sections with Guided Intro locks on week 1', () => {
+    const html = renderToString(<App />);
+    expect(html).toContain('Run Cash Job');
+    expect(html).toContain('Boost Odds');
+    expect(html).toContain('Hire Crew');
+    expect(html).toContain('Unlocks Week 3');
+    expect(html).toContain('Unlocks Week 4');
+    expect(html).toContain('Cost $800 → Leaves $5,200 Street Cash');
+    expect(html).toContain('Needs ≥2 Businesses');
+  });
+
   it('renders the Zinc ledger shell by default and detects ?greybox=1', () => {
     const html = renderToString(<App />);
     expect(html).toContain('Your Wallet');
