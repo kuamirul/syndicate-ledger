@@ -4,6 +4,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { useGameStore, type LedgerTab } from '@/store/gameStore';
 import { selectIncomingRaidCount } from '@/store/selectors';
+import { OperationsTab } from './components/OperationsTab';
 import { GlossaryDrawer } from './components/GlossaryDrawer';
 import { StatusToast } from './components/StatusToast';
 import { TopLedgerBar } from './components/TopLedgerBar';
@@ -48,7 +49,7 @@ export function LedgerShell() {
               </TabsTrigger>
             </TabsList>
             <TabsContent value="ops">
-              <Placeholder title="Operations" body="Run cash jobs, hire crew, bank safe cash and pay off cops." scope="M2-T2" />
+              <OperationsTab />
             </TabsContent>
             <TabsContent value="turf">
               <Placeholder title="Businesses & Raids" body="Claim empty businesses and stage or defend against raids." scope="M2-T2" />
