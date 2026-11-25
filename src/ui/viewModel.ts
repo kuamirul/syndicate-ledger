@@ -8,6 +8,7 @@ import {
   calculateProjectedRacketYield,
   countOwnedRackets,
   hasDistrictMonopoly,
+  racketDefenseBreakdown,
   turfUpkeep,
 } from '../engine/reducer';
 import type {
@@ -33,12 +34,10 @@ export function rollPreview(state: GameState, syndicateId: string, action: Actio
     return job ? calculateRiskProbabilities(attack, job.difficultyDef, action.prepTier) : null;
   }
   if (action.type === 'SEIZE') {
-    const racket = state.rackets[action.racketId];
-    if (!racket) return null;
-    let defense = racket.baseDefense;
-    const owner = racket.ownerId ? state.syndicates[racket.ownerId] : undefined;
-    if (owner) defense += owner.assignedGuards[racket.id] ?? 0;
-    return calculateRiskProbabilities(attack, defense, action.prepTier);
+    if (!state.rackets[action.racketId]) return null;
+    // Exact engine defense incl. the owner's crew garrison (M3-T1). Greybox / dev view only; the
+    // shadcn ledger uses the fog-aware siegeModel.visibleRaidDefense instead.
+    return calculateRiskProbabilities(attack, racketDefenseBreakdown(state, action.racketId).total, action.prepTier);
   }
   return null;
 }
@@ -63,7 +62,6 @@ export interface RacketRow {
 export function buildRacketRows(state: GameState): RacketRow[] {
   return Object.values(state.rackets).map((r) => {
     const owner = r.ownerId ? state.syndicates[r.ownerId] : undefined;
-    const guards = owner?.assignedGuards[r.id] ?? 0;
     return {
       id: r.id,
       name: r.name,
@@ -71,7 +69,7 @@ export function buildRacketRows(state: GameState): RacketRow[] {
       ownerId: r.ownerId,
       ownerName: owner ? owner.name : 'Neutral',
       dirtyYield: r.dirtyYield,
-      defense: r.baseDefense + guards,
+      defense: racketDefenseBreakdown(state, r.id).total,
       passiveHeat: r.passiveHeat,
       damaged: r.damagedTurnsRemaining > 0,
       monopoly: r.ownerId !== null && hasDistrictMonopoly(r.ownerId, r.district, state.rackets),
@@ -169,7 +167,7 @@ export function buildSiegeRows(state: GameState, viewerId: string, showAll = fal
       if (!tapped) continue;
     }
     const owner = ownerId ? state.syndicates[ownerId] : undefined;
-    const defense = racket.baseDefense + (owner?.assignedGuards[racket.id] ?? 0);
+    const defense = racketDefenseBreakdown(state, racket.id).total;
     rows.push({
       id: siege.id,
       direction,

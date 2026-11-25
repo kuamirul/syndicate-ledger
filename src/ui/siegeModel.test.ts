@@ -70,7 +70,8 @@ describe('selectVisibleSieges fog of war', () => {
       PLAYER_ID,
       false
     ).incoming[0]!;
-    const def = RACKETS_BY_DISTRICT.docks[0]!.baseDefense;
+    // M3-T1: the player's 4 starting Thugs (12 Defense) guard its only business (Garrison Split).
+    const def = RACKETS_BY_DISTRICT.docks[0]!.baseDefense + 12;
     expect(weak.odds).toEqual(calculateRiskProbabilities(12, def, 0));
     expect(strong.odds).toEqual(calculateRiskProbabilities(36, def, 0));
     expect(strong.odds.clean).toBeGreaterThan(weak.odds.clean);

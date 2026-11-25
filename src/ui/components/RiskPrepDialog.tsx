@@ -24,6 +24,8 @@ interface Props {
   confirmLabel?: string;
   /** Hide the "Police Heat +X%" line for actions that add no Heat (claims, raids). */
   hideHeat?: boolean;
+  /** Optional defense breakdown shown above the tiers (raids: Base Defense + Guards, fog hint). */
+  defenseNote?: ReactNode;
 }
 
 const OUTCOMES: ReadonlyArray<{ key: RiskOutcome; icon: typeof Sparkles; tone: string }> = [
@@ -57,6 +59,7 @@ function TierPicker({
   footnote,
   confirmLabel,
   hideHeat,
+  defenseNote,
 }: Props) {
   const firstOk = tiers.find((t) => t.disabledReason === null)?.tier ?? 0;
   const [selected, setSelected] = useState<PrepTier>(firstOk);
@@ -70,6 +73,8 @@ function TierPicker({
           <DialogDescription>{description ?? PREP_TERM.subtitle}</DialogDescription>
           {footnote && <p className="text-xs text-zinc-400">{footnote}</p>}
         </DialogHeader>
+
+        {defenseNote && <div className="mb-3 text-xs">{defenseNote}</div>}
 
         <p className="mb-2 text-sm font-medium text-zinc-300">{PREP_TERM.label}</p>
         <div className="grid grid-cols-3 gap-3" role="radiogroup" aria-label={PREP_TERM.label}>

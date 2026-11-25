@@ -27,7 +27,7 @@ describe('rollPreview', () => {
     }
   });
 
-  it('SEIZE preview includes the rival owner\'s assigned guards', () => {
+  it('SEIZE preview includes the rival owner\'s crew garrison and assigned guards', () => {
     const base = createInitialGameState(1);
     const racket = base.rackets.fish_market!;
     const state: GameState = {
@@ -40,7 +40,8 @@ describe('rollPreview', () => {
     };
     const attack = calculateSyndicateAttack(state.syndicates.player!.crew);
     expect(rollPreview(state, 'player', { type: 'SEIZE', racketId: 'fish_market', prepTier: 1 })).toEqual(
-      calculateRiskProbabilities(attack, racket.baseDefense + 9, 1)
+      // M3-T1: ai_1's 4 starting Thugs (12 Defense) guard its only business, plus 9 legacy guards.
+      calculateRiskProbabilities(attack, racket.baseDefense + 12 + 9, 1)
     );
   });
 

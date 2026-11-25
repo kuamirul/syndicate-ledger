@@ -13,6 +13,7 @@ import {
   STREET_JOBS,
   StreetJobSchema,
 } from './index';
+import { MAX_WEEKS } from '../engine/constants';
 
 describe('Static Game Data & Zod Validation', () => {
   describe('Street Jobs', () => {
@@ -176,5 +177,15 @@ describe('Static Game Data & Zod Validation', () => {
         requiredRackets: 5,
       });
     });
+  });
+});
+
+describe('M3-T1 archetype copy matches the 28-week run', () => {
+  it('no signature behavior mentions a stale week count', () => {
+    for (const a of AI_ARCHETYPES) {
+      const weeks = [...a.signatureBehavior.matchAll(/Week-(\d+)/g)].map((m) => Number(m[1]));
+      for (const w of weeks) expect(w).toBe(MAX_WEEKS);
+    }
+    expect(ARCHETYPES_BY_ID.banker!.signatureBehavior).toContain(`Week-${MAX_WEEKS}`);
   });
 });

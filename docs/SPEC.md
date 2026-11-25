@@ -46,6 +46,16 @@
 - **Plain-English UI:** player-facing labels come from `src/ui/terms.ts` (e.g. `EXTORT` → "Run Cash Job", `LAUNDER` → "Bank Safe Cash (2x Score, 1/wk)", Heat / `ricoCounter` → "Police Heat" / "Arrest Strikes", Valuation → "Net Worth", Turf Upkeep → "Size Tax"). Engine identifiers are unchanged.
 - **Guided Intro (UI only, default ON, toggle `[Guided Intro: ON]`):** weeks 1–2 *Build Your Base* (Run Cash Job, Claim Empty Business, Hire Crew); week 3 *Protect Profits* adds Bank Safe Cash and Pay Off Cops; week 4+ *Turf War* adds Stage Rival Raid, Spy on Rival and Snitch on Rival. The engine and AI have no week locks.
 
+### 2.4 Crew Defense in Rival Raids (M3-T1 — applies equally to Player & AI)
+- **Garrison Split:** every owned racket is guarded by its owner's crew. A rival raid rolls against `baseDefense + GuardDefense`, where `GuardDefense = floor(TotalCrewDefense / max(1, OwnedRackets)) + assignedGuards` (`assignedGuards` is a legacy field, still always `0`). Crew Defense is `Σ(units × tier defense)`: Thug `3`, Enforcer `8`, Hitman `12`. A concentrated 1–2 racket crew defends hard; a sprawling empire spreads thin. Measured at resolve time, before ownership changes.
+- **Neutral claims are unchanged:** an unowned racket has no guards.
+- **Defender casualties:** when a rival raid takes a racket (`CLEAN` or `MESSY`), the previous owner loses `1` crew (`DEFENDER_TAKEOVER_CASUALTIES`), lowest tier first, never below `0`. A `BOTCHED` raid (the defender holds) costs the defender nothing. The siege log line appends `; defender lost N crew`.
+- **Fog-of-War:** a racket's Guard Defense is private to its owner. A syndicate sees it exactly for its own rackets, neutral rackets and rackets of a rival it is Wiretapping. Otherwise:
+  - the AI estimates guards from public state only: `floor(AI_ASSUMED_RIVAL_CREW_DEF (12, the public starting roster) / max(1, rival's OwnedRackets))`;
+  - the player UI shows the base defense only, with the hint "Excludes hidden rival guards — Spy ($1,000) for exact odds".
+- **Defend-recruit (AI scoring only):** a raid queued against your racket is public to you. While one is pending, `RECRUIT` gains `round(15 × W.caution)` utility (`AI_DEFEND_RECRUIT_BONUS`) if the hire raises the per-racket Guard Defense. The Opportunist's weak-rival bonus (target has `<= 2` crew) now needs an active Wiretap, because crew is private.
+- Variant B (Garrison Split) was chosen over Variant A (`baseDefense + min(cap, CrewDefense)`) in the M3-T1 prototype. Cap 24 sat on the 3.0% Domination floor, and caps 12/18 broke the 33% single-seed Warlord limit.
+
 ---
 
 ## 3. v0.1 Economy & Content Numbers
@@ -56,7 +66,7 @@
 
 ### 3.2 Player & AI Verbs (1 AP Each)
 1. **`EXTORT` (Street Job):** Pick 1 of 6 jobs; optional Prep spend; resolve 3-Tier Risk Roll for instant `DirtyCash`. With `0` crew only `shakedown` is legal (§2.3).
-2. **`SEIZE` (Claim/Attack Racket):** Target neutral or rival racket (`+$1,500` base assault cost + optional Prep). Neutral uses Racket `baseDefense` and resolves instantly; Rival uses `RacketBaseDefense + AssignedGuardDefense` and is queued as a 2-turn Siege (§2.1). Requires at least `1` crew (§2.3). Win transfers ownership and inflicts casualties on Messy/Botched.
+2. **`SEIZE` (Claim/Attack Racket):** Target neutral or rival racket (`+$1,500` base assault cost + optional Prep). Neutral uses Racket `baseDefense` and resolves instantly; Rival uses `RacketBaseDefense + GuardDefense` (the owner's Garrison Split crew defense, §2.4) and is queued as a 2-turn Siege (§2.1). Requires at least `1` crew (§2.3). Win transfers ownership and inflicts casualties on Messy/Botched.
 3. **`RECRUIT` (Hire Crew / Draft Lieutenant):** Hire up to 3 Crew units in one action OR draft 1 available Lieutenant from the shared city pool.
 4. **`LAUNDER` (Dirty -> Clean):** Convert up to `$10,000 DirtyCash` into `CleanCash` at a `25%` fee (`$7,500 Clean`), `+0 Heat`; max `1` per week (§2.3).
 5. **`BRIBE` (Cut Heat / Frame Rival):** Spend `$3,000 CleanCash` (or `$4,500 DirtyCash`) for `-22 Heat` on self OR `+12 Heat` on a target rival (max `1` Frame per week, §2.1).
@@ -110,8 +120,8 @@ Let `R = AttackerAttack / max(1, TargetDefense)`:
   - `P_Botched = clamp(BaseBotched - PrepBotchReduction, 5, 100 - P_Clean)`
   - `P_Messy = 100 - P_Clean - P_Botched`
 - **Outcome Consequences:**
-  - `CLEAN`: Full reward/seizure, `0` Crew lost, Clean Heat delta.
-  - `MESSY`: Messy reward (or racket seized damaged at 50% yield for 1 wk), lose `1` lowest-tier Crew unit, Messy Heat delta, `+15` Target Grudge (clamped to `100`).
+  - `CLEAN`: Full reward/seizure, `0` Crew lost, Clean Heat delta. Taking a rival's racket also costs its owner `1` crew (§2.4).
+  - `MESSY`: Messy reward (or racket seized damaged at 50% yield for 1 wk), lose `1` lowest-tier Crew unit, Messy Heat delta, `+15` Target Grudge (clamped to `100`). A rival's racket seized this way also costs its owner `1` crew (§2.4).
   - `BOTCHED`: `$0` reward / seizure fails, lose `2` Crew units, Botched Heat delta, `+25` Target Grudge (clamped to `100`).
 
 ---
@@ -125,6 +135,7 @@ Every AI action generates a logged `DecisionTrace` using:
 - **Hard Survival Overrides (`EmergencyModifiers`):**
   - If `Heat >= 80`: `BRIBE` receives `+75` emergency utility.
   - If projected Sunday cash `< Payroll`: `EXTORT` (highest EV > 60% win job) receives `+65` utility; `RECRUIT` is clamped to `-999`.
+- **Fog-of-War (M3-T1):** raid scoring reads a rival's private crew only through an active Wiretap; otherwise it uses the public estimate in §2.4. A pending raid on your own racket adds the defend-recruit utility (§2.4).
 - **Anti-Leader Coalition (`CoalitionBonus` — Milestone 3):**
   - Whenever any syndicate holds `>= 5 Rackets`, all other AI syndicates apply `+40` utility to hostile actions targeting the leader and `+35` utility to accepting Truces with fellow trailing syndicates.
 
@@ -173,6 +184,9 @@ Every AI action generates a logged `DecisionTrace` using:
     - Domination share `3.0%–75.0%` of games (in a 28-week sprint Domination is a rare early blowout valve; most games go to the Week-28 Net Worth count).
     - Average game length `20–28` weeks.
     - Sim speed: `< 7.0 s` per 1,000 games and `<= 0.25 ms` per game-week.
+
+### Milestone 3: Alpha
+- **`M3-T1` (Crew Defense):** Garrison Split crew defense in rival raids, defender takeover casualty, Fog-of-War AI raid scoring, defend-recruit utility, Raid Survival UI (Defense Preview, fog hints), `Week-28` archetype copy (§2.4). Gated against the M2-T0 28-week balance gate (4 seeds × 1,000 games, sequential).
 
 ### Milestones 2–5 Summary (Weeks 4–18 | 145h)
 - **M2 Vertical Slice (`W4–W6`, 30h):** `shadcn/ui` 4-tab dark `Zinc` layout, Wiretap Inspector drawer, Prep odds modal.

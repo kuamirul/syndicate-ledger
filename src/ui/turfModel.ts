@@ -12,19 +12,26 @@ import {
   MAX_WEEKS,
   SIEGE_LEAD_WEEKS,
 } from '../engine/constants';
-import { calculateTotalCrewCount } from '../engine/crew';
+import { CREW_BY_ID } from '../data';
 import {
+  calculateSyndicateAttack,
+  calculateSyndicateDefense,
+  calculateTotalCrewCount,
+  garrisonDefense,
+} from '../engine/crew';
+import {
+  applyAction,
   calculateProjectedRacketYield,
   countOwnedRackets,
   hasDistrictMonopoly,
   turfUpkeep,
 } from '../engine/reducer';
-import type { DistrictId, GameState, PrepTier, RacketState, RiskOutcome } from '../engine/types';
+import { calculateRiskProbabilities } from '../engine/risk';
+import type { DistrictId, GameState, PrepTier, RacketState, RiskOutcome, RiskProbabilities } from '../engine/types';
 import { verbLock } from './guidedIntro';
 import { buildPrepTierOptions, canAct, noActionReason, type OutcomeConsequence, type PrepTierOption } from './operationsModel';
-import { selectVisibleSieges } from './siegeModel';
-import { DISTRICT_NAMES, SPEND_TERMS, TURF_TERMS } from './terms';
-import { rollPreview } from './viewModel';
+import { selectVisibleSieges, visibleRaidDefense, type VisibleSiege } from './siegeModel';
+import { DEFENSE_TERMS, DISTRICT_NAMES, SPEND_TERMS, TURF_TERMS } from './terms';
 
 export const DISTRICT_ORDER: readonly DistrictId[] = ['docks', 'neon_strip', 'industrial', 'uptown'];
 
@@ -78,7 +85,13 @@ export interface BusinessCard {
   /** "Unowned", "Yours" or the rival's name. */
   ownerLabel: string;
   baseValue: number;
+  /** Defense used for the odds shown: base + guards when known, base only while guards are hidden. */
   defense: number;
+  baseDefense: number;
+  /** Owner's crew guards (M3-T1), or null while hidden by Fog-of-War (un-Spied rival). */
+  guardDefense: number | null;
+  /** Amber Fog-of-War hint for an un-Spied rival's business, else null. */
+  fogHint: string | null;
   /** Weekly income this business pays its owner right now (damaged = half). */
   grossWeekly: number;
   damaged: boolean;
@@ -152,7 +165,8 @@ export function selectDistrictCards(
     const cards = rackets.map((racket): BusinessCard => {
       const owner = racket.ownerId ? state.syndicates[racket.ownerId] : undefined;
       const kind: CardKind = racket.ownerId === playerId ? 'yours' : racket.ownerId ? 'raid' : 'claim';
-      const defense = racket.baseDefense + (owner?.assignedGuards[racket.id] ?? 0);
+      const defenseView = visibleRaidDefense(state, playerId, racket.id, devOmniscient);
+      const attack = calculateSyndicateAttack(state.syndicates[playerId]?.crew ?? { thug: 0, enforcer: 0, hitman: 0 });
       const damaged = racket.damagedTurnsRemaining > 0;
       const ownerMonopoly = racket.ownerId ? hasDistrictMonopoly(racket.ownerId, district, state.rackets) : false;
       const baseYield = ownerMonopoly ? Math.floor(racket.dirtyYield * 1.25) : racket.dirtyYield;
@@ -163,7 +177,7 @@ export function selectDistrictCards(
         kind === 'yours'
           ? []
           : buildPrepTierOptions(state, playerId, ASSAULT_BASE_COST, (tier: PrepTier) =>
-              rollPreview(state, playerId, { type: 'SEIZE', racketId: racket.id, prepTier: tier })
+              calculateRiskProbabilities(attack, defenseView.total, tier)
             );
       const free = tiers.find((t) => t.tier === 0);
       const lock = kind === 'raid' ? verbLock('stageRaid', state.week, guidedIntro) : { locked: false };
@@ -177,7 +191,10 @@ export function selectDistrictCards(
         ownerId: racket.ownerId,
         ownerLabel: kind === 'yours' ? 'Yours' : owner ? owner.name : 'Unowned',
         baseValue: racket.baseValue,
-        defense,
+        defense: defenseView.total,
+        baseDefense: defenseView.baseDefense,
+        guardDefense: defenseView.guardDefense,
+        fogHint: defenseView.guardsHidden ? DEFENSE_TERMS.fogHint : null,
         grossWeekly,
         damaged,
         impact: kind === 'yours' ? null : marginalImpact(state, playerId, racket.id),
@@ -209,9 +226,9 @@ export function selectDistrictCards(
 export function turfConsequences(card: BusinessCard, totalCrew: number): Record<RiskOutcome, OutcomeConsequence> {
   const raid = card.kind === 'raid';
   return {
-    CLEAN: { gain: 'Take the business', crewLost: 0, heat: 0 },
+    CLEAN: { gain: `Take the business${raid ? `; ${DEFENSE_TERMS.defenderLoss}` : ''}`, crewLost: 0, heat: 0 },
     MESSY: {
-      gain: `Take it, damaged: half income for 1 week${raid ? '; rival grudge +15' : ''}`,
+      gain: `Take it, damaged: half income for 1 week${raid ? `; rival grudge +15; ${DEFENSE_TERMS.defenderLoss}` : ''}`,
       crewLost: Math.min(1, totalCrew),
       heat: 0,
     },
@@ -221,4 +238,62 @@ export function turfConsequences(card: BusinessCard, totalCrew: number): Record<
       heat: 0,
     },
   };
+}
+
+// ---------------------------------------------------------------------------------------------
+// M3-T1: Incoming raid alerts with a Defense Preview
+// ---------------------------------------------------------------------------------------------
+
+export interface IncomingRaidAlert {
+  raid: VisibleSiege;
+  baseDefense: number;
+  /** The viewer's exact guards on this business now. */
+  guardDefense: number;
+  /** Guards after hiring one more Street Thug (same Garrison Split rule as the engine). */
+  guardDefenseWithThug: number;
+  oddsNow: RiskProbabilities;
+  oddsWithThug: RiskProbabilities;
+  /** True when one more Thug actually changes the attacker's odds. */
+  thugHelps: boolean;
+  /** Plain-English Defense Preview line for the banner. */
+  previewText: string;
+  /** Whether the engine would accept RECRUIT 1 Street Thug right now (dry run of applyAction). */
+  canHireThug: boolean;
+}
+
+/**
+ * Raids queued against the viewer's businesses, each with a "+1 Street Thug" Defense Preview.
+ * The viewer's own guards are exact; attacker odds follow selectVisibleSieges (attacker's current crew).
+ */
+export function selectIncomingRaidAlerts(state: GameState, playerId: string, devOmniscient: boolean): IncomingRaidAlert[] {
+  const me = state.syndicates[playerId];
+  if (!me) return [];
+  const thug = CREW_BY_ID.thug;
+  const owned = countOwnedRackets(playerId, state.rackets);
+  const crewDefense = calculateSyndicateDefense(me.crew);
+  const canHireThug = applyAction(state, playerId, { type: 'RECRUIT', tier: 'thug', count: 1 }).result.executed;
+
+  return selectVisibleSieges(state, playerId, devOmniscient).incoming.map((raid) => {
+    const attacker = state.syndicates[raid.attackerId];
+    const attack = attacker ? calculateSyndicateAttack(attacker.crew) : 0;
+    const legacy = me.assignedGuards[raid.racketId] ?? 0;
+    const guardDefense = raid.defense.guardDefense ?? 0;
+    const guardDefenseWithThug = garrisonDefense(crewDefense + thug.defense, owned) + legacy;
+    const oddsWithThug = calculateRiskProbabilities(attack, raid.defense.baseDefense + guardDefenseWithThug, raid.prepTier);
+    const oddsNow = raid.odds;
+    const thugHelps = oddsWithThug.clean !== oddsNow.clean || oddsWithThug.botched !== oddsNow.botched;
+    return {
+      raid,
+      baseDefense: raid.defense.baseDefense,
+      guardDefense,
+      guardDefenseWithThug,
+      oddsNow,
+      oddsWithThug,
+      thugHelps,
+      previewText: thugHelps
+        ? DEFENSE_TERMS.thugPreview(oddsNow.clean, oddsWithThug.clean, oddsNow.botched, oddsWithThug.botched)
+        : DEFENSE_TERMS.thugNoChange(owned),
+      canHireThug,
+    };
+  });
 }

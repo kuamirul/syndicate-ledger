@@ -9,7 +9,9 @@ import {
 } from '../data';
 import {
   ACTION_POINTS_PER_WEEK,
+  AI_ASSUMED_RIVAL_CREW_DEF,
   AI_CASH_RESERVE,
+  AI_DEFEND_RECRUIT_BONUS,
   AI_FRAME_SELF_HEAT,
   AI_FRAME_SELF_HEAT_PENALTY,
   AI_FRAME_THREAT_GRUDGE,
@@ -41,8 +43,10 @@ import {
 } from './constants';
 import {
   calculateSyndicateAttack,
+  calculateSyndicateDefense,
   calculateSyndicatePayroll,
   calculateTotalCrewCount,
+  garrisonDefense,
 } from './crew';
 import {
   applyAction,
@@ -50,6 +54,7 @@ import {
   calculateSyndicateValuation,
   countOwnedRackets,
   projectSundayHeat,
+  racketDefenseBreakdown,
   turfUpkeep,
 } from './reducer';
 import type { ActionResult } from './reducer';
@@ -66,6 +71,36 @@ import type {
 } from './types';
 
 const PREP_TIERS: readonly PrepTier[] = [0, 1, 2];
+
+/** Whether `viewerId` holds an active wiretap on `targetId` (Fog-of-War gate for private state). */
+export function hasWiretap(state: GameState, viewerId: string, targetId: string): boolean {
+  return (state.syndicates[viewerId]?.wiretapTurnsRemaining[targetId] ?? 0) > 0;
+}
+
+export interface RaidDefenseEstimate {
+  baseDefense: number;
+  guardDefense: number;
+  total: number;
+  /** True when guards are exact (own racket, neutral, or the owner is wiretapped). */
+  exact: boolean;
+}
+
+/**
+ * Raid defense of a racket as `viewerId` may know it (M3-T1 Fog-of-War). Exact for neutral rackets,
+ * the viewer's own rackets and rackets of a wiretapped owner. Otherwise only public state is used:
+ * the base defense plus the Garrison Split of AI_ASSUMED_RIVAL_CREW_DEF over the owner's public
+ * business count. Never reads the owner's private crew without a wiretap.
+ */
+export function estimateRaidDefense(state: GameState, viewerId: string, racketId: string): RaidDefenseEstimate {
+  const racket = state.rackets[racketId];
+  if (!racket) return { baseDefense: 0, guardDefense: 0, total: 0, exact: true };
+  const ownerId = racket.ownerId;
+  if (ownerId === null || ownerId === viewerId || hasWiretap(state, viewerId, ownerId)) {
+    return { ...racketDefenseBreakdown(state, racketId), exact: true };
+  }
+  const guardDefense = garrisonDefense(AI_ASSUMED_RIVAL_CREW_DEF, countOwnedRackets(ownerId, state.rackets));
+  return { baseDefense: racket.baseDefense, guardDefense, total: racket.baseDefense + guardDefense, exact: false };
+}
 
 /**
  * Net expected cash of one EXTORT attempt: E[payout] - prep - E[casualty replacement]
@@ -313,6 +348,10 @@ export interface ScoringContext {
   currentBestJobEV: number;
   /** `${jobId}_${prepTier}` of the single best >=60%-win EXTORT the actor can afford, if any. */
   bestEmergencyJobKey: string | null;
+  /** Queued rival raids against the actor's own businesses (public to the defender). */
+  incomingRaids: number;
+  /** The actor's total crew defense (its own, private-to-itself stat). */
+  crewDefense: number;
 }
 
 /** Builds the per-state ScoringContext for one syndicate. */
@@ -374,7 +413,16 @@ export function buildScoringContext(state: GameState, syndicateId: string): Scor
   }
   expectedIncomingFrameHeat = Math.min(expectedIncomingFrameHeat, AI_INCOMING_FRAME_HEAT_CAP);
 
+  let incomingRaids = 0;
+  for (const siege of state.activeSieges) {
+    if (siege.attackerId !== syndicateId && state.rackets[siege.racketId]?.ownerId === syndicateId) {
+      incomingRaids++;
+    }
+  }
+
   return {
+    incomingRaids,
+    crewDefense: calculateSyndicateDefense(actor.crew),
     leaderId,
     projectedYield,
     attack,
@@ -485,8 +533,9 @@ export function scoreCandidateAction(
       const prepCost = PREP_CONFIG[action.prepTier].cost;
       const isRival = racket.ownerId !== null && racket.ownerId !== actor.id;
       const targetDefender = racket.ownerId ? state.syndicates[racket.ownerId] : null;
-      const assignedGuards = targetDefender?.assignedGuards[racket.id] ?? 0;
-      const targetDefense = racket.baseDefense + assignedGuards;
+      // Fog-of-War (M3-T1): exact guards only for a wiretapped owner, else a public estimate.
+      const defenseView = estimateRaidDefense(state, actor.id, racket.id);
+      const targetDefense = defenseView.total;
 
       const probs = calculateRiskProbabilities(actorAttack, targetDefense, action.prepTier);
       const pSuccess = (probs.clean + probs.messy) / 100;
@@ -539,8 +588,9 @@ export function scoreCandidateAction(
         turfScore += 25;
       }
 
-      // The Opportunist strikes weakened rivals (defender has <= 2 total crew)
-      if (actor.archetypeId === 'opportunist' && targetDefender) {
+      // The Opportunist strikes weakened rivals (defender has <= 2 total crew). Crew is private,
+      // so it only sees this through an active wiretap (M3-T1 Fog-of-War).
+      if (actor.archetypeId === 'opportunist' && targetDefender && hasWiretap(state, actor.id, targetDefender.id)) {
         const defenderCrewCount = calculateTotalCrewCount(targetDefender.crew);
         if (defenderCrewCount <= 2) {
           turfScore += 25;
@@ -570,7 +620,10 @@ export function scoreCandidateAction(
       }
 
       const siegeNote = isRival ? `, telegraphs siege resolving wk ${state.week + SIEGE_LEAD_WEEKS}` : '';
-      reasoning = `Seizing ${racket.name} in ${racket.district} (Win ${probs.clean + probs.messy}%, Turf +${turfScore}${coalitionBonus ? ', Coalition +40' : ''}${siegeNote})`;
+      const defenseNote = isRival
+        ? `, Def ${defenseView.total} = base ${defenseView.baseDefense} + guards ${defenseView.exact ? '' : '~'}${defenseView.guardDefense}${defenseView.exact ? ' (spied)' : ' (est.)'}`
+        : '';
+      reasoning = `Seizing ${racket.name} in ${racket.district} (Win ${probs.clean + probs.messy}%, Turf +${turfScore}${coalitionBonus ? ', Coalition +40' : ''}${defenseNote}${siegeNote})`;
       break;
     }
 
@@ -608,6 +661,16 @@ export function scoreCandidateAction(
         if (leaderId && leaderId !== actor.id && actorAttack < AI_WEAK_ATTACK) {
           coalitionBonus = AI_LEADER_REARM_BONUS;
           reasoning += `, rearming against leader +${AI_LEADER_REARM_BONUS}`;
+        }
+        // Defend (M3-T1): a raid queued against our turf is public to us; hire if it raises guards.
+        if (c.incomingRaids > 0) {
+          const before = garrisonDefense(c.crewDefense, c.ownedCount);
+          const after = garrisonDefense(c.crewDefense + action.count * tierDef.defense, c.ownedCount);
+          if (after > before) {
+            const defendBonus = Math.round(AI_DEFEND_RECRUIT_BONUS * weights.caution);
+            emergencyModifiers += defendBonus;
+            reasoning += `, guarding vs incoming raid (guards ${before} -> ${after}) +${defendBonus}`;
+          }
         }
         if (actorAttack === 0) {
           emergencyModifiers += AI_ZERO_CREW_REARM_BONUS;
