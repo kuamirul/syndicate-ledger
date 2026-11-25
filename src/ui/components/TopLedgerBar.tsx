@@ -15,7 +15,8 @@ import { cn } from '@/lib/utils';
 import { countOwnedRackets } from '../../engine/reducer';
 import { MAX_WEEKS } from '../../engine/constants';
 import { guidedPhase } from '../guidedIntro';
-import { arrestStrikesLabel, OUTCOME_LABELS, TERMS } from '../terms';
+import { isRunLive, selectMatchSummary } from '../matchSummary';
+import { arrestStrikesLabel, HOTKEY_TERMS, SUMMARY_TERMS, TERMS } from '../terms';
 import { PLAYER_ID } from '../viewModel';
 import { DeltaBadge } from './DeltaBadge';
 import { ForecastPopover } from './ForecastPopover';
@@ -91,7 +92,8 @@ function Cluster({ className, children }: { className?: string; children: React.
 function GameplayHud() {
   const game = useGameStore((s) => s.gameState);
   const delta = useGameStore((s) => s.lastCashDelta);
-  const endWeek = useGameStore((s) => s.endWeek);
+  const requestEndWeek = useGameStore((s) => s.requestEndWeek);
+  const reopenSummary = useGameStore((s) => s.reopenSummary);
   const player = game.syndicates[PLAYER_ID];
   const projection = selectSundayProjection(game, PLAYER_ID);
   if (!player || !projection) return null;
@@ -99,9 +101,9 @@ function GameplayHud() {
   const owned = countOwnedRackets(PLAYER_ID, game.rackets);
   const rank = selectCityRank(game, PLAYER_ID);
   const netWorth = selectNetWorth(game, PLAYER_ID);
-  const over = game.isGameOver;
+  const over = !isRunLive(game, PLAYER_ID);
+  const summary = selectMatchSummary(game, PLAYER_ID);
   const heatTone = player.heat >= 100 ? 'bg-rose-600' : player.heat >= 70 ? 'bg-orange-500' : 'bg-amber-500';
-  const winner = game.winnerId ? game.syndicates[game.winnerId] : undefined;
 
   return (
     <div className="grid grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)] gap-2 bg-zinc-950 px-4 py-2">
@@ -180,14 +182,27 @@ function GameplayHud() {
             />
           ))}
         </div>
-        <Button size="sm" className="bg-amber-500 text-zinc-950 hover:bg-amber-400" disabled={over} onClick={endWeek}>
-          <Swords className="size-4" aria-hidden /> End Week
+        <Button size="sm" className="bg-amber-500 text-zinc-950 hover:bg-amber-400" disabled={over} onClick={requestEndWeek} aria-keyshortcuts="Space">
+          <Swords className="size-4" aria-hidden /> {over ? SUMMARY_TERMS.matchComplete : 'End Week'}
+          {!over && (
+            <kbd className="ml-1 rounded border border-zinc-900/40 px-1 text-[10px] font-medium opacity-70">
+              {HOTKEY_TERMS.endWeek}
+            </kbd>
+          )}
         </Button>
       </Cluster>
 
-      {over && (
-        <div className="col-span-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-sm text-amber-300" role="status">
-          Match Over — {winner ? `${winner.name} wins: ${OUTCOME_LABELS[game.winReason ?? ''] ?? game.winReason}` : 'No winner'}
+      {over && summary && (
+        <div
+          className="col-span-4 flex items-center justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-sm text-amber-300"
+          role="status"
+        >
+          <span>
+            {SUMMARY_TERMS.matchComplete} — {summary.title}. {summary.decisiveFactor}
+          </span>
+          <Button size="sm" variant="outline" onClick={reopenSummary}>
+            {SUMMARY_TERMS.viewResults}
+          </Button>
         </div>
       )}
     </div>

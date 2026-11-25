@@ -21,7 +21,7 @@ import {
 } from '../engine/reducer';
 import type { DistrictId, GameState, PrepTier, RacketState, RiskOutcome } from '../engine/types';
 import { verbLock } from './guidedIntro';
-import { buildPrepTierOptions, canAct, type OutcomeConsequence, type PrepTierOption } from './operationsModel';
+import { buildPrepTierOptions, canAct, noActionReason, type OutcomeConsequence, type PrepTierOption } from './operationsModel';
 import { selectVisibleSieges } from './siegeModel';
 import { DISTRICT_NAMES, SPEND_TERMS, TURF_TERMS } from './terms';
 import { rollPreview } from './viewModel';
@@ -122,7 +122,7 @@ export function turfDisabledReason(
     const lock = verbLock('stageRaid', state.week, guidedIntro);
     if (lock.locked) return lock.badge ?? TURF_TERMS.raidLock;
   }
-  if (!canAct(state, syndicateId)) return SPEND_TERMS.noActions;
+  if (!canAct(state, syndicateId)) return noActionReason(state, syndicateId);
   if (calculateTotalCrewCount(actor.crew) === 0) return SPEND_TERMS.requiresCrew;
   if (isRaid) {
     if (state.week + SIEGE_LEAD_WEEKS > MAX_WEEKS) return `Too late: a raid must land by Week ${MAX_WEEKS}`;
