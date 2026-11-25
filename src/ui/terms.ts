@@ -205,3 +205,54 @@ export const OPS_SECTIONS = {
   protect: { label: 'Protect Profits', subtitle: 'Bank cash and cool the police.' },
   covert: { label: 'Covert Ops', subtitle: 'Watch and sabotage rivals.' },
 } as const;
+
+// ---------------------------------------------------------------------------------------------
+// M2-T3: Businesses & Raids, Rivals & Spying
+// ---------------------------------------------------------------------------------------------
+
+/** Plain-English district names (engine ids are `DistrictId`). */
+export const DISTRICT_NAMES: Readonly<Record<string, string>> = {
+  docks: 'Docks',
+  neon_strip: 'Neon Strip',
+  industrial: 'Industrial',
+  uptown: 'Uptown',
+};
+
+export const TURF_TERMS = {
+  activeRaids: 'Active Raids',
+  noRaids: 'No raids are queued against your businesses.',
+  outgoingSlots: 'Outgoing Raid Slots',
+  rivalRaids: 'Spied Rival Raids',
+  monopolyActive: '+25% District Bonus Active',
+  sizeTaxExceeds: '[Size Tax Exceeds Income]',
+  claimInstant: 'Claim Empty Business — Instant',
+  raidQueued: 'Stage Rival Raid — 2 Wks',
+  raidLock: 'Unlocks Week 4',
+  claimConfirmNote: 'Resolves immediately. A Messy claim leaves the business damaged (half income) for one week.',
+  raidConfirmNote: 'Queued now, resolves at the start of the week shown. The owner gets one full turn to react.',
+} as const;
+
+export const RIVAL_TERMS = {
+  hidden: '???',
+  redactedCaption: 'Spy on this rival to reveal their cash, crew, Heat and planned moves. [DEV] in the top bar reveals all AI math for code review.',
+  devRevealed: 'DEV Revealed',
+  viewMath: 'View AI Decision Math',
+  viewIntel: 'View Full Rival Intel →',
+} as const;
+
+/** Plain-English personality tag per archetype, shown next to the archetype badge. */
+export const ARCHETYPE_TAGS: Readonly<Record<string, string>> = {
+  warlord: 'Aggressive Expansion',
+  banker: 'Safe Cash Scaler',
+  rat: 'Snitch & Frame',
+  opportunist: 'Strikes the Weak',
+  turtle: 'Fortress Builder',
+};
+
+/** Utility AI score components as the Decision Sheet labels them (weight key in `ArchetypeWeights`). */
+export const SCORE_COMPONENTS = [
+  { key: 'evScore', label: 'Earnings (EV)', weight: 'greed', sign: 1 },
+  { key: 'turfScore', label: 'Turf', weight: 'aggression', sign: 1 },
+  { key: 'heatRiskScore', label: 'Heat Risk', weight: 'caution', sign: -1 },
+  { key: 'grudgeScore', label: 'Grudge', weight: 'revenge', sign: 1 },
+] as const;

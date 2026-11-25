@@ -1,29 +1,16 @@
 import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { useGameStore, type LedgerTab } from '@/store/gameStore';
 import { selectIncomingRaidCount } from '@/store/selectors';
 import { OperationsTab } from './components/OperationsTab';
 import { GlossaryDrawer } from './components/GlossaryDrawer';
+import { RivalsTab } from './components/RivalsTab';
 import { StatusToast } from './components/StatusToast';
 import { TopLedgerBar } from './components/TopLedgerBar';
+import { TurfTab } from './components/TurfTab';
 import { WeeklyLog } from './components/WeeklyLog';
 import { PLAYER_ID } from './viewModel';
-
-function Placeholder({ title, body, scope }: { title: string; body: string; scope: string }) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{title}</CardTitle>
-        <CardDescription>{body}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <Badge variant="outline">Coming in {scope}</Badge>
-      </CardContent>
-    </Card>
-  );
-}
 
 export function LedgerShell() {
   const activeTab = useGameStore((s) => s.activeTab);
@@ -52,10 +39,10 @@ export function LedgerShell() {
               <OperationsTab />
             </TabsContent>
             <TabsContent value="turf">
-              <Placeholder title="Businesses & Raids" body="Claim empty businesses and stage or defend against raids." scope="M2-T2" />
+              <TurfTab />
             </TabsContent>
             <TabsContent value="rivals">
-              <Placeholder title="Rivals & Spying" body="Spy on rivals and snitch to the police." scope="M2-T3" />
+              <RivalsTab />
             </TabsContent>
             <TabsContent value="ledger">
               <WeeklyLog />

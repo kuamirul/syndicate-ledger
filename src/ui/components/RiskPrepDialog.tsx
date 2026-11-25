@@ -20,6 +20,10 @@ interface Props {
   onConfirm: (tier: PrepTier) => void;
   /** Extra line under the title, e.g. "Resolves in 2 weeks". */
   footnote?: ReactNode;
+  /** Override the confirm button text (default: "Confirm & Spend 1 Action"). */
+  confirmLabel?: string;
+  /** Hide the "Police Heat +X%" line for actions that add no Heat (claims, raids). */
+  hideHeat?: boolean;
 }
 
 const OUTCOMES: ReadonlyArray<{ key: RiskOutcome; icon: typeof Sparkles; tone: string }> = [
@@ -43,7 +47,17 @@ export function RiskPrepDialog(props: Props) {
   );
 }
 
-function TierPicker({ onOpenChange, title, description, tiers, consequences, onConfirm, footnote }: Props) {
+function TierPicker({
+  onOpenChange,
+  title,
+  description,
+  tiers,
+  consequences,
+  onConfirm,
+  footnote,
+  confirmLabel,
+  hideHeat,
+}: Props) {
   const firstOk = tiers.find((t) => t.disabledReason === null)?.tier ?? 0;
   const [selected, setSelected] = useState<PrepTier>(firstOk);
   const chosen = tiers.find((t) => t.tier === selected);
@@ -128,7 +142,7 @@ function TierPicker({ onOpenChange, title, description, tiers, consequences, onC
                 <ul className="space-y-0.5 tabular-nums text-zinc-300">
                   <li>{c.gain}</li>
                   <li>{c.crewLost === 0 ? 'No crew lost' : `Lose ${c.crewLost} crew`}</li>
-                  <li>Police Heat +{c.heat}%</li>
+                  {!hideHeat && <li>Police Heat +{c.heat}%</li>}
                 </ul>
               </div>
             );
@@ -147,7 +161,7 @@ function TierPicker({ onOpenChange, title, description, tiers, consequences, onC
               onOpenChange(false);
             }}
           >
-            {SPEND_TERMS.confirm}
+            {confirmLabel ?? SPEND_TERMS.confirm}
           </Button>
         </div>
     </>
