@@ -3,7 +3,7 @@
 **Read first:** `AGENTS.md`, `docs/SPEC.md` (§2.1, §2.4 new, §3.2, §4, §5.1), `docs/HANDOFF-m2.md`, this note.
 
 ## State
-- `npm test`: **366 tests green** (25 files; M3-T1 added 38, including the new `src/engine/crewDefense.test.ts`). `npm run lint`, `npm run typecheck`, `npm run build` clean.
+- `npm test`: **363 tests green** (25 files; M3-T1 added 35, including the new `src/engine/crewDefense.test.ts`). `npm run lint`, `npm run typecheck`, `npm run build` clean.
 - Bundle (gzipped, Vite report): **173.67 KB JS + 5.90 KB CSS = 179.57 KB** (was 177.64 KB), budget 250 KB.
 - Engine purity: no `Math.random` / `Date.now` / `randomUUID` / React / DOM in `/src/engine/`. Every new value is an integer.
 - Headless Chromium audit at **1280x720 and 1024x768**: 40/40 checks. Zero console errors and `scrollWidth <= innerWidth` on all four tabs and both raid dialogs. Also checks the alert breakdown, the +1 Thug preview, the Spied and Un-Spied dialogs, that `Hire Crew to Defend →` opens Operations, and the translated Weekly Log line. Screenshots: `docs/screenshots/m3-t1-*.png`.
