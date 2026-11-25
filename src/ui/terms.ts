@@ -188,6 +188,7 @@ export const SPEND_TERMS = {
   alreadyBanked: 'Already Banked This Week (1/1)',
   alreadySnitched: 'Already Snitched This Week (1/1)',
   noActions: 'No actions left',
+  matchComplete: 'Match Complete',
   confirm: 'Confirm & Spend 1 Action',
 } as const;
 
@@ -256,3 +257,44 @@ export const SCORE_COMPONENTS = [
   { key: 'heatRiskScore', label: 'Heat Risk', weight: 'caution', sign: -1 },
   { key: 'grudgeScore', label: 'Grudge', weight: 'revenge', sign: 1 },
 ] as const;
+
+// ---------------------------------------------------------------------------------------------
+// M2-T4: Match Summary, Unspent-Action Guard, Hotkeys
+// ---------------------------------------------------------------------------------------------
+
+/** Final-standings outcome badges (plain English; engine reasons are RICO / INSOLVENT / WIPED_OUT). */
+export const MATCH_OUTCOME_LABELS = {
+  winnerNetWorth: 'Winner — Net Worth',
+  winnerDomination: 'Winner — 8+ Businesses',
+  winnerLastStanding: 'Winner — Last Crew Standing',
+  arrested: 'Arrested (Police Heat)',
+  bankrupt: 'Bankrupt',
+  wipedOut: 'Wiped Out',
+  stillStanding: 'Still Standing',
+} as const;
+
+export const SUMMARY_TERMS = {
+  victory: 'Victory',
+  defeat: 'Defeat',
+  decisive: 'Decisive Factor',
+  newRun: 'New Run (Random Seed)',
+  retrySeed: (seed: number) => `Retry Exact Seed (#${seed})`,
+  inspect: 'Inspect Final Board',
+  viewResults: 'View Final Results',
+  matchComplete: 'Match Complete',
+  eliminatedNote: 'You are out of the run; rivals may still be playing. Standings are as of the week you fell.',
+  boardNote: 'Final standings. Every rival is fully revealed.',
+} as const;
+
+export const GUARD_TERMS = {
+  title: 'End Week with actions left?',
+  keepPlaying: 'Keep Playing',
+  endAnyway: 'End Week Anyway',
+  dontWarn: "Don't warn again (this session)",
+  body: (n: number) => `You still have ${n} Action${n === 1 ? '' : 's'} left this week — End Week anyway?`,
+} as const;
+
+export const HOTKEY_TERMS = {
+  endWeek: 'Space',
+  tabHint: 'Press 1–4 to switch tabs, Space to end the week',
+} as const;

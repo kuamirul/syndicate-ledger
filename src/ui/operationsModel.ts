@@ -30,6 +30,7 @@ import type {
 } from '../engine/types';
 import { selectSundayProjection } from '../store/selectors';
 import { verbLock, type VerbLock } from './guidedIntro';
+import { SPEND_TERMS } from './terms';
 import { rollPreview } from './viewModel';
 
 export const PREP_TIERS: readonly PrepTier[] = [0, 1, 2];
@@ -86,6 +87,12 @@ export function canAct(state: GameState, syndicateId: string): boolean {
   return !!s && !state.isGameOver && !s.isEliminated && s.actionPoints >= 1;
 }
 
+/** Disabled-button reason when no action can be spent: "Match Complete" once the run is over for the player. */
+export function noActionReason(state: GameState, syndicateId: string): string {
+  const s = state.syndicates[syndicateId];
+  return state.isGameOver || !s || s.isEliminated ? SPEND_TERMS.matchComplete : SPEND_TERMS.noActions;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Risk preview (jobs and, in M2-T3, claims / raids)
 // ---------------------------------------------------------------------------------------------
@@ -121,7 +128,7 @@ export function buildPrepTierOptions(
     const safety = evaluateSpendSafety(state, syndicateId, streetCost, 0);
     if (!odds || !base || !safety) continue;
     let disabledReason: string | null = null;
-    if (!canAct(state, syndicateId)) disabledReason = 'No actions left';
+    if (!canAct(state, syndicateId)) disabledReason = noActionReason(state, syndicateId);
     else if (!safety.affordable) disabledReason = `Need ${money(streetCost)} Street Cash`;
     out.push({
       tier,
@@ -231,7 +238,7 @@ export function buildCrewOptions(state: GameState, syndicateId: string): CrewHir
       const affordable = s.dirtyCash + s.cleanCash >= cost;
       let disabledReason: string | null = null;
       if (!unlocked) disabledReason = `Needs ≥${tier.requiredRackets} Businesses`;
-      else if (!canAct(state, syndicateId)) disabledReason = 'No actions left';
+      else if (!canAct(state, syndicateId)) disabledReason = noActionReason(state, syndicateId);
       else if (!affordable) disabledReason = `Need ${money(cost)}`;
       out.push({
         tier,
@@ -290,7 +297,7 @@ export function buildLaunderOption(state: GameState, syndicateId: string, amount
   if (!safety) return null;
   let disabledReason: string | null = null;
   if (launderUsed(state, syndicateId)) disabledReason = 'Already Banked This Week (1/1)';
-  else if (!canAct(state, syndicateId)) disabledReason = 'No actions left';
+  else if (!canAct(state, syndicateId)) disabledReason = noActionReason(state, syndicateId);
   else if (a <= 0 || a > LAUNDER_MAX) disabledReason = `Pick $1–${money(LAUNDER_MAX)}`;
   else if (s.dirtyCash < a) disabledReason = `Need ${money(a)} Street Cash`;
   return {
@@ -330,7 +337,7 @@ export function buildPayCopsOptions(state: GameState, syndicateId: string): Brib
     const safety = evaluateSpendSafety(state, syndicateId, streetCost, safeCost);
     if (!safety) continue;
     let disabledReason: string | null = null;
-    if (!canAct(state, syndicateId)) disabledReason = 'No actions left';
+    if (!canAct(state, syndicateId)) disabledReason = noActionReason(state, syndicateId);
     else if (!safety.affordable) disabledReason = useClean ? `Need ${money(safeCost)} Safe Cash` : `Need ${money(streetCost)} Street Cash`;
     out.push({
       useClean,
@@ -361,7 +368,7 @@ export function buildSpyOption(state: GameState, syndicateId: string, targetId: 
   if (!safety) return null;
   let disabledReason: string | null = null;
   if (!target || target.isEliminated || targetId === syndicateId) disabledReason = 'Pick a living rival';
-  else if (!canAct(state, syndicateId)) disabledReason = 'No actions left';
+  else if (!canAct(state, syndicateId)) disabledReason = noActionReason(state, syndicateId);
   else if (!safety.affordable) disabledReason = `Need ${money(WIRETAP_COST)} Street Cash`;
   return { targetId, safety, disabledReason };
 }
@@ -394,7 +401,7 @@ export function buildSnitchOptions(state: GameState, syndicateId: string, target
     let disabledReason: string | null = null;
     if (!target || target.isEliminated || targetId === syndicateId) disabledReason = 'Pick a living rival';
     else if (framesUsed(state, syndicateId)) disabledReason = 'Already Snitched This Week (1/1)';
-    else if (!canAct(state, syndicateId)) disabledReason = 'No actions left';
+    else if (!canAct(state, syndicateId)) disabledReason = noActionReason(state, syndicateId);
     else if (!safety.affordable) disabledReason = useClean ? `Need ${money(safeCost)} Safe Cash` : `Need ${money(streetCost)} Street Cash`;
     out.push({
       useClean,
