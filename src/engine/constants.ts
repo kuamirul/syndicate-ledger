@@ -86,3 +86,26 @@ export const AI_ZERO_CREW_REARM_BONUS = 25;
 export const AI_LONG_YIELD_WEEKS = 8;
 /** SEIZE turf bonus at >= 6 rackets, only when the SEIZE's net EV (after upkeep) is >= 0. */
 export const AI_NEAR_DOMINATION_BONUS = 20;
+
+// --- Crew Defense in rival raids (M3-T1). Game rule: applies to every syndicate via resolveAssault().
+
+/**
+ * Garrison Split: an owner's total crew defense is spread over every business it owns, so a raided
+ * business gains floor(crewDefense / max(1, ownedBusinesses)) guard defense. Neutral claims get none.
+ */
+export const GARRISON_MIN_SPLIT = 1;
+/** Crew units a defender loses (lowest tier first) when a rival raid takes its business. */
+export const DEFENDER_TAKEOVER_CASUALTIES = 1;
+
+// --- Crew Defense AI tuning (M3-T1). Scoring only; fog-of-war respecting.
+
+/**
+ * Crew defense an AI assumes for a rival it is NOT wiretapping: the public starting roster
+ * (4 Street Thugs x 3 defense). Public rule knowledge only; never the rival's private crew.
+ */
+export const AI_ASSUMED_RIVAL_CREW_DEF = 12;
+/**
+ * RECRUIT utility, scaled by the archetype's caution weight, when a raid is queued against one of
+ * the actor's businesses (public to the defender) and the hire would raise that business's guards.
+ */
+export const AI_DEFEND_RECRUIT_BONUS = 15;

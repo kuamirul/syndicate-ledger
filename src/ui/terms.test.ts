@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { plainEventText, plainRejection, plainStatusMessage } from './terms';
+import { DEFENSE_TERMS, plainEventText, plainRejection, plainStatusMessage } from './terms';
 
 describe('plainEventText', () => {
   it('translates Sunday ledger events', () => {
@@ -37,5 +37,33 @@ describe('plainStatusMessage (extended)', () => {
   it('also covers turf upkeep and RICO wording', () => {
     expect(plainStatusMessage('Rejected: turf upkeep unpaid')).toBe('Rejected: Size Tax unpaid');
     expect(plainStatusMessage('RICO indictment looms')).toBe('Police Bust / Arrest looms');
+  });
+});
+
+describe('M3-T1 raid defense wording', () => {
+  const RAW = /\b(rackets?|sieges?|RICO|DirtyCash|CleanCash|assignedGuards|garrison)\b/i;
+  it('translates the defender-casualty siege line', () => {
+    expect(
+      plainEventText(
+        "Start of week 6: The Iron Syndicate's siege on Fish Market took the racket (MESSY, roll 42, lost 1 crew; defender lost 1 crew)."
+      )
+    ).toBe("Week 6 start: The Iron Syndicate's raid on Fish Market took the business (MESSY, roll 42, lost 1 crew; the owner lost 1 guard).");
+    expect(plainEventText("Start of week 6: X's siege on Fish Market took the racket (CLEAN, roll 3, lost 0 crew; defender lost 2 crew).")).toContain(
+      'the owner lost 2 guards'
+    );
+  });
+  it('a failed raid line (no defender loss) keeps its wording', () => {
+    const out = plainEventText("Start of week 6: X's siege on Fish Market failed (BOTCHED, roll 99, lost 2 crew).");
+    expect(out).toBe("Week 6 start: X's raid on Fish Market failed (BOTCHED, roll 99, lost 2 crew).");
+    expect(out).not.toMatch(RAW);
+  });
+  it('defense UI strings contain no raw engine identifiers', () => {
+    const strings = [
+      ...Object.values(DEFENSE_TERMS).flatMap((v) => (typeof v === 'string' ? [v] : [])),
+      DEFENSE_TERMS.thugPreview(40, 31, 30, 41),
+      DEFENSE_TERMS.thugNoChange(4),
+    ];
+    for (const s of strings) expect(s).not.toMatch(RAW);
+    expect(DEFENSE_TERMS.fogHint).toBe('Excludes hidden rival guards — Spy ($1,000) for exact odds');
   });
 });

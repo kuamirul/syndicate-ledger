@@ -7,6 +7,7 @@ import {
   BRIBE_DIRTY_COST,
   BRIBE_FRAME_HEAT,
   BRIBE_SELF_HEAT,
+  DEFENDER_TAKEOVER_CASUALTIES,
   EMPIRE_FREE_RACKETS,
   EMPIRE_HEAT_PER_RACKET,
   GRUDGE_DECAY_PCT,
@@ -25,10 +26,12 @@ import {
 } from './constants';
 import {
   calculateSyndicateAttack,
+  calculateSyndicateDefense,
   calculateSyndicatePayroll,
   calculateTotalCrewCount,
+  garrisonDefense,
 } from './crew';
-import { PREP_CONFIG, resolveRiskRoll } from './risk';
+import { PREP_CONFIG, removeLowestTierCrew, resolveRiskRoll } from './risk';
 import { rollPercentage } from './rng';
 import type {
   Action,
@@ -291,6 +294,8 @@ export interface ActionResult {
   queued?: boolean;
   /** Week at whose start a queued siege resolves. */
   resolveWeek?: number;
+  /** Crew the defending owner lost when a rival assault took its racket (M3-T1). */
+  defenderCasualtiesLost?: number;
 }
 
 /** Adds grudge held by `holder` against `targetId`, clamped to 0..GRUDGE_MAX. MUTATES `holder`. */
@@ -317,17 +322,45 @@ export function siegeId(week: number, attackerId: string, racketId: string): str
   return `${week}:${attackerId}:${racketId}`;
 }
 
+export interface RacketDefenseBreakdown {
+  /** The racket's own defense (public). */
+  baseDefense: number;
+  /** Owner's crew garrison + legacy assignedGuards; 0 for a neutral racket (private to the owner). */
+  guardDefense: number;
+  total: number;
+}
+
+/**
+ * Exact raid defense of a racket right now (M3-T1): baseDefense + the owner's Garrison Split crew
+ * defense + any legacy assignedGuards. Neutral rackets have no guards. Single source of truth for
+ * resolveAssault(), wiretapped AI scoring and the owner's own UI.
+ */
+export function racketDefenseBreakdown(state: GameState, racketId: string): RacketDefenseBreakdown {
+  const racket = state.rackets[racketId];
+  if (!racket) return { baseDefense: 0, guardDefense: 0, total: 0 };
+  const owner = racket.ownerId ? state.syndicates[racket.ownerId] : undefined;
+  const guardDefense = owner
+    ? garrisonDefense(calculateSyndicateDefense(owner.crew), countOwnedRackets(owner.id, state.rackets)) +
+      (owner.assignedGuards[racketId] ?? 0)
+    : 0;
+  return { baseDefense: racket.baseDefense, guardDefense, total: racket.baseDefense + guardDefense };
+}
+
 interface AssaultResolution {
   outcome: RiskOutcome;
   roll: number;
   seized: boolean;
   casualtiesLost: number;
+  /** Crew the previous owner lost because the racket was taken (0 for neutral claims). */
+  defenderCasualtiesLost: number;
 }
 
 /**
- * Resolves an assault on a racket: risk roll (attacker's current attack vs base defense + the
- * owner's assigned guards), ownership transfer, damage, attacker casualties and defender grudge.
- * Shared by instant SEIZE and siege resolution. MUTATES `state`, which must be a fresh clone.
+ * Resolves an assault on a racket: risk roll (attacker's current attack vs racketDefenseBreakdown:
+ * base defense + the owner's crew garrison), ownership transfer, damage, attacker casualties,
+ * defender grudge and, when a rival's racket is taken, DEFENDER_TAKEOVER_CASUALTIES lowest-tier
+ * defender crew (never below 0). Shared by instant SEIZE and siege resolution. MUTATES `state`,
+ * which must be a fresh clone.
  */
 function resolveAssault(
   state: GameState,
@@ -338,12 +371,10 @@ function resolveAssault(
   const attacker = state.syndicates[attackerId]!;
   const racket = state.rackets[racketId]!;
 
-  let defense = racket.baseDefense;
   const previousOwnerId = racket.ownerId;
   const previousOwner = previousOwnerId ? state.syndicates[previousOwnerId] : undefined;
-  if (previousOwner) {
-    defense += previousOwner.assignedGuards[racket.id] ?? 0;
-  }
+  // Defense is measured before ownership changes, so the garrison split uses the owner's count now.
+  const defense = racketDefenseBreakdown(state, racket.id).total;
 
   const resolution = resolveRiskRoll(
     calculateSyndicateAttack(attacker.crew),
@@ -372,11 +403,20 @@ function resolveAssault(
     addGrudge(previousOwner, attackerId, 25);
   }
 
+  // The guards holding a racket that falls to a rival take losses (CLEAN or MESSY takeover).
+  let defenderCasualtiesLost = 0;
+  if (seized && previousOwner) {
+    const loss = removeLowestTierCrew(previousOwner.crew, DEFENDER_TAKEOVER_CASUALTIES);
+    previousOwner.crew = loss.remainingCrew;
+    defenderCasualtiesLost = loss.totalLost;
+  }
+
   return {
     outcome: resolution.outcome,
     roll: resolution.roll,
     seized,
     casualtiesLost: resolution.casualties.totalLost,
+    defenderCasualtiesLost,
   };
 }
 
@@ -546,6 +586,7 @@ export function applyAction(
           outcome: assault.outcome,
           roll: assault.roll,
           casualtiesLost: assault.casualtiesLost,
+          defenderCasualtiesLost: assault.defenderCasualtiesLost,
         },
       };
     }
@@ -694,8 +735,10 @@ function resolveDueSieges(state: GameState): string[] {
       continue;
     }
     const assault = resolveAssault(state, attacker.id, racket.id, siege.prepTier);
+    const defenderLoss =
+      assault.defenderCasualtiesLost > 0 ? `; defender lost ${assault.defenderCasualtiesLost} crew` : '';
     events.push(
-      `${prefix} ${assault.seized ? 'took the racket' : 'failed'} (${assault.outcome}, roll ${assault.roll}, lost ${assault.casualtiesLost} crew).`
+      `${prefix} ${assault.seized ? 'took the racket' : 'failed'} (${assault.outcome}, roll ${assault.roll}, lost ${assault.casualtiesLost} crew${defenderLoss}).`
     );
   }
   state.activeSieges = remaining;

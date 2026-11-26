@@ -1,4 +1,4 @@
-import { Building2, Crosshair, Eye, Lock, Siren, Swords } from 'lucide-react';
+import { Building2, Crosshair, EyeOff, Eye, Lock, Shield, Siren, Swords, UserPlus } from 'lucide-react';
 import { useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -7,8 +7,15 @@ import { cn } from '@/lib/utils';
 import { useGameStore } from '@/store/gameStore';
 import { calculateTotalCrewCount } from '../../engine/crew';
 import { selectVisibleSieges, type VisibleSiege } from '../siegeModel';
-import { TERMS, TURF_TERMS, VERBS } from '../terms';
-import { selectDistrictCards, turfConsequences, type BusinessCard, type DistrictCard } from '../turfModel';
+import { DEFENSE_TERMS, TERMS, TURF_TERMS, VERBS } from '../terms';
+import {
+  selectDistrictCards,
+  selectIncomingRaidAlerts,
+  turfConsequences,
+  type BusinessCard,
+  type DistrictCard,
+  type IncomingRaidAlert,
+} from '../turfModel';
 import { PLAYER_ID } from '../viewModel';
 import { money, signedMoney } from './format';
 import { RiskPrepDialog } from './RiskPrepDialog';
@@ -35,12 +42,60 @@ function RaidRow({ raid }: { raid: VisibleSiege }) {
   );
 }
 
+/** "Defense 22 = 10 base + 12 guards", or "10 base + guards ???" while a rival's guards are hidden. */
+export function DefenseBreakdown({ base, guards }: { base: number; guards: number | null }) {
+  return (
+    <span className="tabular-nums text-zinc-300">
+      {guards === null ? (
+        <>
+          {DEFENSE_TERMS.base} {base} + <span className="text-amber-400">{DEFENSE_TERMS.guardsHidden}</span>
+        </>
+      ) : (
+        <>
+          {DEFENSE_TERMS.base} {base} + {DEFENSE_TERMS.guards} {guards} = {base + guards}
+        </>
+      )}
+    </span>
+  );
+}
+
+function IncomingRaidRow({ alert, onHire, onSpy }: { alert: IncomingRaidAlert; onHire: () => void; onSpy: () => void }) {
+  const { raid } = alert;
+  return (
+    <div className="space-y-1.5 rounded-md border border-rose-500/30 bg-zinc-950/60 p-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <RaidRow raid={raid} />
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" onClick={onHire} disabled={!alert.canHireThug}>
+            <UserPlus className="size-3.5" aria-hidden />
+            {DEFENSE_TERMS.hireToDefend}
+          </Button>
+          <Button size="sm" variant="outline" onClick={onSpy}>
+            <Eye className="size-3.5" aria-hidden />
+            Spy / Snitch on {raid.attackerName} →
+          </Button>
+        </div>
+      </div>
+      <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+        <span className="inline-flex items-center gap-1">
+          <Shield className="size-3.5 text-emerald-400" aria-hidden />
+          <DefenseBreakdown base={alert.baseDefense} guards={alert.guardDefense} />
+        </span>
+        <span className={alert.thugHelps ? 'text-emerald-300' : 'text-zinc-400'} data-testid="defense-preview">
+          {alert.previewText}
+        </span>
+      </p>
+    </div>
+  );
+}
+
 function RaidStrip() {
   const game = useGameStore((s) => s.gameState);
   const dev = useGameStore((s) => s.devOmniscient);
   const setTab = useGameStore((s) => s.setActiveTab);
   const sieges = selectVisibleSieges(game, PLAYER_ID, dev);
   const { incoming, outgoing, rivalVsRival, outgoingSlots } = sieges;
+  const alerts = selectIncomingRaidAlerts(game, PLAYER_ID, dev);
 
   return (
     <section aria-label={TURF_TERMS.activeRaids} className="space-y-2">
@@ -51,19 +106,11 @@ function RaidStrip() {
               <Siren className="size-4" aria-hidden />
               {TURF_TERMS.activeRaids}: {incoming.length} against your businesses
             </CardTitle>
-            <CardDescription className="text-rose-200/80">
-              The odds below are the attacker&apos;s chance against your business today. Crew does not defend a business.
-            </CardDescription>
+            <CardDescription className="text-rose-200/80">{DEFENSE_TERMS.incomingCaption}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
-            {incoming.map((r) => (
-              <div key={r.id} className="flex flex-wrap items-center justify-between gap-2">
-                <RaidRow raid={r} />
-                <Button size="sm" variant="outline" onClick={() => setTab('rivals')}>
-                  <Eye className="size-3.5" aria-hidden />
-                  Spy / Snitch on {r.attackerName} →
-                </Button>
-              </div>
+            {alerts.map((a) => (
+              <IncomingRaidRow key={a.raid.id} alert={a} onHire={() => setTab('ops')} onSpy={() => setTab('rivals')} />
             ))}
           </CardContent>
         </Card>
@@ -79,6 +126,12 @@ function RaidStrip() {
           <span key={r.id} className="inline-flex items-center gap-2">
             <Swords className="size-3.5 text-amber-400" aria-hidden />
             You → {r.racketName}, lands Week {r.resolveWeek} <OddsPill {...r.odds} />
+            {r.defense.guardsHidden && (
+              <span className="inline-flex items-center gap-1 text-amber-400" title={DEFENSE_TERMS.fogHint}>
+                <EyeOff className="size-3" aria-hidden />
+                {DEFENSE_TERMS.guardsHidden}
+              </span>
+            )}
           </span>
         ))}
         {rivalVsRival.length > 0 && <span className="text-zinc-400">{TURF_TERMS.rivalRaids}:</span>}
@@ -123,7 +176,14 @@ function BusinessTile({ card, onBoost }: { card: BusinessCard; onBoost: () => vo
         </div>
         <div>
           <dt className="text-zinc-500">Defense</dt>
-          <dd>{card.defense}</dd>
+          <dd title={card.guardDefense === null ? DEFENSE_TERMS.fogHint : DEFENSE_TERMS.guardsRule}>
+            {card.defense}
+            {card.guardDefense === null ? (
+              <span className="text-amber-400">+?</span>
+            ) : (
+              card.guardDefense > 0 && <span className="text-zinc-500"> ({card.baseDefense}+{card.guardDefense})</span>
+            )}
+          </dd>
         </div>
         <div>
           <dt className="text-zinc-500">Income/wk</dt>
@@ -139,6 +199,12 @@ function BusinessTile({ card, onBoost }: { card: BusinessCard; onBoost: () => vo
       </dl>
 
       {card.raidNote && <p className="text-rose-300">{card.raidNote}</p>}
+      {card.fogHint && card.kind === 'raid' && !card.lockBadge && (
+        <p className="flex items-center gap-1 text-amber-400">
+          <EyeOff className="size-3 shrink-0" aria-hidden />
+          {card.fogHint}
+        </p>
+      )}
 
       {impact && (
         <p className={cn('tabular-nums', impact.exceedsIncome ? 'text-rose-300' : 'text-zinc-300')}>
@@ -226,6 +292,10 @@ export function TurfTab() {
           {VERBS.claimBusiness.label}: instant. {VERBS.stageRaid.label}: lands 2 weeks later.
         </span>
         <span>{TERMS.sizeTax.subtitle}</span>
+        <span className="inline-flex items-center gap-1">
+          <Shield className="size-3.5" aria-hidden />
+          {DEFENSE_TERMS.guardsRule}
+        </span>
       </p>
       <div className="space-y-3">
         {districts.map((d) => (
@@ -246,6 +316,24 @@ export function TurfTab() {
           tiers={dialogCard.tiers}
           consequences={turfConsequences(dialogCard, crew)}
           hideHeat
+          defenseNote={
+            dialogCard.kind === 'raid' ? (
+              <div className="space-y-1 rounded-md border border-zinc-800 bg-zinc-950 p-2">
+                <p className="flex items-center gap-1">
+                  <Shield className="size-3.5 text-zinc-400" aria-hidden />
+                  <DefenseBreakdown base={dialogCard.baseDefense} guards={dialogCard.guardDefense} />
+                </p>
+                {dialogCard.fogHint ? (
+                  <p className="flex items-center gap-1 text-amber-400">
+                    <EyeOff className="size-3.5 shrink-0" aria-hidden />
+                    {dialogCard.fogHint}
+                  </p>
+                ) : (
+                  <p className="text-emerald-400">{DEFENSE_TERMS.spiedExact}</p>
+                )}
+              </div>
+            ) : undefined
+          }
           confirmLabel={dialogCard.kind === 'raid' ? 'Confirm & Queue Raid (1 Action)' : undefined}
           onConfirm={(tier) => perform({ type: 'SEIZE', racketId: dialogCard.id, prepTier: tier })}
         />

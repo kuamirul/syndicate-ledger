@@ -156,6 +156,7 @@ function sentenceCase(text: string): string {
 export function plainEventText(event: string): string {
   return plainWords(event)
     .replace(/was called off \(attacker eliminated\)/, 'was called off (attacker is out)')
+    .replace(/; defender lost (\d+) crew/, (_m, n: string) => `; the owner lost ${n} guard${n === '1' ? '' : 's'}`)
     .replace(/Police Raid hit ([^!]+)!/, 'Police raid hit $1!')
     .replace(/Start of week (\d+): /, 'Week $1 start: ');
 }
@@ -297,4 +298,27 @@ export const GUARD_TERMS = {
 export const HOTKEY_TERMS = {
   endWeek: 'Space',
   tabHint: 'Press 1–4 to switch tabs, Space to end the week',
+} as const;
+
+// ---------------------------------------------------------------------------------------------
+// M3-T1: Crew Defense (guards) in rival raids
+// ---------------------------------------------------------------------------------------------
+
+export const DEFENSE_TERMS = {
+  base: 'Base Defense',
+  guards: 'Guards',
+  guardsHidden: 'Guards ???',
+  guardsRule:
+    "Your crew guards every business you own: their total Defense is split evenly across your businesses. If a raid takes a business, its owner loses 1 guard.",
+  fogHint: 'Excludes hidden rival guards — Spy ($1,000) for exact odds',
+  spiedExact: 'Spied: exact guards included',
+  hireToDefend: 'Hire Crew to Defend →',
+  incomingCaption:
+    "The attacker's chance against your business today, including your guards. More crew raises every business's guards before the raid lands.",
+  defenderLoss: 'owner loses 1 guard',
+  /** "Hiring +1 Thug ($800) drops attacker Clean win 40% -> 31% (Botched 30% -> 41%)". */
+  thugPreview: (cleanFrom: number, cleanTo: number, botchedFrom: number, botchedTo: number) =>
+    `Hiring +1 Thug ($800) drops attacker Clean win ${cleanFrom}% -> ${cleanTo}% (Botched ${botchedFrom}% -> ${botchedTo}%)`,
+  thugNoChange: (owned: number) =>
+    `Hiring +1 Thug ($800) would not change these odds: guards are split across your ${owned} businesses`,
 } as const;

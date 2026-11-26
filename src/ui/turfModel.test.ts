@@ -2,7 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { RACKETS_BY_DISTRICT } from '../data';
 import { applyAction, cloneGameState, createInitialGameState } from '../engine/reducer';
 import type { GameState } from '../engine/types';
-import { marginalImpact, selectDistrictCards, turfConsequences, type BusinessCard } from './turfModel';
+import { calculateRiskProbabilities } from '../engine/risk';
+import { selectVisibleSieges, visibleRaidDefense } from './siegeModel';
+import { DEFENSE_TERMS } from './terms';
+import {
+  marginalImpact,
+  selectDistrictCards,
+  selectIncomingRaidAlerts,
+  turfConsequences,
+  type BusinessCard,
+} from './turfModel';
 import { PLAYER_ID } from './viewModel';
 
 const ids = (d: keyof typeof RACKETS_BY_DISTRICT) => RACKETS_BY_DISTRICT[d].map((r) => r.id);
@@ -209,5 +218,111 @@ describe('turfConsequences', () => {
     const claim = turfConsequences(card(fresh(), ids('docks')[1]!), 4);
     expect(claim.MESSY.gain).not.toContain('grudge');
     expect(claim.BOTCHED.crewLost).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// M3-T1: Crew Defense, Fog-of-War breakdown and incoming-raid Defense Preview
+// ---------------------------------------------------------------------------------------------
+
+describe('M3-T1 business defense breakdown respects Fog-of-War', () => {
+  const [a, b] = ids('docks') as [string, string];
+  const rivalWorld = (mut?: (s: GameState) => void) =>
+    fresh((x) => {
+      x.week = 5;
+      give(x, 'ai_1', [a]);
+      x.syndicates.ai_1!.crew = { thug: 2, enforcer: 2, hitman: 0 }; // 22 Defense, 1 business
+      mut?.(x);
+    });
+  const myAttack = 12; // 4 starting Thugs
+
+  it('un-Spied rival: base defense only, guards hidden, amber hint, odds from base only', () => {
+    const c = card(rivalWorld(), a);
+    expect(c).toMatchObject({ kind: 'raid', baseDefense: 10, guardDefense: null, defense: 10 });
+    expect(c.fogHint).toBe(DEFENSE_TERMS.fogHint);
+    expect(c.tiers[0]!.odds).toEqual(calculateRiskProbabilities(myAttack, 10, 0));
+  });
+
+  it('un-Spied odds do not move when the rival hides more crew', () => {
+    const strong = rivalWorld((x) => (x.syndicates.ai_1!.crew = { thug: 0, enforcer: 3, hitman: 0 }));
+    expect(card(strong, a).tiers.map((t) => t.odds)).toEqual(card(rivalWorld(), a).tiers.map((t) => t.odds));
+  });
+
+  it('Spied rival: exact guards in the breakdown and the odds, no hint', () => {
+    const c = card(rivalWorld((x) => (x.syndicates[PLAYER_ID]!.wiretapTurnsRemaining.ai_1 = 2)), a);
+    expect(c).toMatchObject({ baseDefense: 10, guardDefense: 22, defense: 32, fogHint: null });
+    expect(c.tiers[0]!.odds).toEqual(calculateRiskProbabilities(myAttack, 32, 0));
+  });
+
+  it('DEV reveals exact guards; claims have 0 guards; own businesses show own guards', () => {
+    const s = rivalWorld((x) => give(x, PLAYER_ID, [ids('uptown')[0]!]));
+    const dev = selectDistrictCards(s, PLAYER_ID, false, true).flatMap((d) => d.cards);
+    expect(dev.find((c) => c.id === a)).toMatchObject({ guardDefense: 22, fogHint: null });
+    expect(card(s, b)).toMatchObject({ kind: 'claim', guardDefense: 0, defense: 10, fogHint: null });
+    expect(card(s, ids('uptown')[0]!)).toMatchObject({ kind: 'yours', guardDefense: 12, fogHint: null });
+  });
+
+  it('visibleRaidDefense flags an outgoing raid on an un-Spied rival', () => {
+    const s = rivalWorld((x) => {
+      x.activeSieges = [{ id: `5:${PLAYER_ID}:${a}`, attackerId: PLAYER_ID, racketId: a, prepTier: 0, telegraphedWeek: 5, resolveWeek: 7 }];
+    });
+    const out = selectVisibleSieges(s, PLAYER_ID, false).outgoing[0]!;
+    expect(out.defense).toEqual({ baseDefense: 10, guardDefense: null, total: 10, guardsHidden: true });
+    expect(visibleRaidDefense(s, PLAYER_ID, a, true).guardsHidden).toBe(false);
+  });
+});
+
+describe('M3-T1 incoming raid Defense Preview (+1 Street Thug)', () => {
+  const [a, b, c2] = ids('docks') as [string, string, string];
+  const incoming = (owned: string[], mut?: (s: GameState) => void) =>
+    fresh((x) => {
+      x.week = 5;
+      give(x, PLAYER_ID, owned);
+      x.syndicates.ai_1!.crew = { thug: 6, enforcer: 0, hitman: 0 }; // attack 18
+      x.activeSieges = [{ id: `4:ai_1:${a}`, attackerId: 'ai_1', racketId: a, prepTier: 1, telegraphedWeek: 4, resolveWeek: 6 }];
+      mut?.(x);
+    });
+
+  it('one business: +1 Thug raises guards 12 -> 15 and cuts the attacker Clean odds', () => {
+    const [alert] = selectIncomingRaidAlerts(incoming([a]), PLAYER_ID, false);
+    expect(alert).toMatchObject({ baseDefense: 10, guardDefense: 12, guardDefenseWithThug: 15, thugHelps: true, canHireThug: true });
+    expect(alert!.oddsNow).toEqual(calculateRiskProbabilities(18, 22, 1));
+    expect(alert!.oddsWithThug).toEqual(calculateRiskProbabilities(18, 25, 1));
+    expect(alert!.oddsWithThug.clean).toBeLessThan(alert!.oddsNow.clean);
+    expect(alert!.previewText).toBe(
+      DEFENSE_TERMS.thugPreview(alert!.oddsNow.clean, alert!.oddsWithThug.clean, alert!.oddsNow.botched, alert!.oddsWithThug.botched)
+    );
+    expect(alert!.previewText).toMatch(/^Hiring \+1 Thug \(\$800\) drops attacker Clean win \d+% -> \d+%/);
+  });
+
+  it('four businesses: +1 Thug does not cross the split, so the preview says no change', () => {
+    const [alert] = selectIncomingRaidAlerts(incoming([a, b, c2, ids('uptown')[0]!]), PLAYER_ID, false);
+    expect(alert).toMatchObject({ guardDefense: 3, guardDefenseWithThug: 3, thugHelps: false });
+    expect(alert!.previewText).toBe(DEFENSE_TERMS.thugNoChange(4));
+  });
+
+  it('0 crew and $0: guards are 0, and the hire button is disabled per applyAction', () => {
+    const s = incoming([a], (x) => {
+      x.syndicates[PLAYER_ID]!.crew = { thug: 0, enforcer: 0, hitman: 0 };
+      x.syndicates[PLAYER_ID]!.dirtyCash = 0;
+    });
+    const [alert] = selectIncomingRaidAlerts(s, PLAYER_ID, false);
+    expect(alert).toMatchObject({ guardDefense: 0, guardDefenseWithThug: 3, canHireThug: false });
+  });
+
+  it('no incoming raids, no alerts', () => {
+    expect(selectIncomingRaidAlerts(fresh(), PLAYER_ID, false)).toEqual([]);
+  });
+
+  it('raid consequences warn that the owner loses a guard; claims do not', () => {
+    const s = fresh((x) => {
+      x.week = 5;
+      give(x, 'ai_1', [a]);
+    });
+    const raid = turfConsequences(card(s, a), 4);
+    expect(raid.CLEAN.gain).toContain(DEFENSE_TERMS.defenderLoss);
+    expect(raid.MESSY.gain).toContain(DEFENSE_TERMS.defenderLoss);
+    expect(raid.BOTCHED.gain).not.toContain(DEFENSE_TERMS.defenderLoss);
+    expect(turfConsequences(card(s, b), 4).CLEAN.gain).toBe('Take the business');
   });
 });

@@ -467,9 +467,11 @@ describe('Archetype behavioral tendencies', () => {
     patched = patchSyndicate(patched, 'ai_2', {
       crew: { thug: 1, enforcer: 0, hitman: 0 },
     });
+    // M3-T1 Fog-of-War: crew is private, so the Opportunist needs an active wiretap to see it.
     patched = patchSyndicate(patched, 'ai_3', {
       archetypeId: 'opportunist',
       dirtyCash: 10000,
+      wiretapTurnsRemaining: { ai_2: 2 },
     });
 
     const scored = scoreCandidateAction(patched, 'ai_3', {
@@ -480,6 +482,21 @@ describe('Archetype behavioral tendencies', () => {
 
     // Opportunist bonus for weakened rival (crew <= 2) should apply
     expect(scored.scores.turfScore).toBeGreaterThan(40);
+  });
+
+  it('Opportunist gets no weak-rival bonus without a wiretap (M3-T1 Fog-of-War)', () => {
+    const state = createInitialGameState(1);
+    const racketId = Object.keys(state.rackets).find((id) => state.rackets[id]!.ownerId === null)!;
+    let patched = giveRackets(state, 'ai_2', [racketId]);
+    patched = patchSyndicate(patched, 'ai_2', { crew: { thug: 1, enforcer: 0, hitman: 0 } });
+    patched = patchSyndicate(patched, 'ai_3', { archetypeId: 'opportunist', dirtyCash: 10000 });
+    const blind = scoreCandidateAction(patched, 'ai_3', { type: 'SEIZE', racketId, prepTier: 0 });
+    const tapped = scoreCandidateAction(
+      patchSyndicate(patched, 'ai_3', { wiretapTurnsRemaining: { ai_2: 1 } }),
+      'ai_3',
+      { type: 'SEIZE', racketId, prepTier: 0 }
+    );
+    expect(tapped.scores.turfScore - blind.scores.turfScore).toBe(25);
   });
 });
 
